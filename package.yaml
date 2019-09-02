@@ -30,6 +30,7 @@ dependencies:
 - test-framework-hunit
 - safe
 - haskeline
+- pretty-simple
   
 library:
   source-dirs: src
