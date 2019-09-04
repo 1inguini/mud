@@ -4,6 +4,7 @@ module Parse where
 import           Control.Arrow                  ((&&&), (***), (>>>))
 import           Control.Monad                  (join, void)
 import           Control.Monad.Combinators.Expr
+import           Data.Char
 import           Data.Maybe
 import           Data.Void
 import           Debug.Trace
@@ -21,16 +22,16 @@ type Parser = Parsec Void String
 sc :: Parser ()
 sc = L.space spaceOrTab1 lineCmnt blockCmnt
   where
-    spaceOrTab1 = void $ takeWhile1P (Just "white space") (\c -> c == ' ' || c == '\t')
+    spaceOrTab1 = void $ takeWhile1P (Just "white space") (\c -> isSpace c && c /= '\n')
     lineCmnt  = L.skipLineComment "#"
     blockCmnt = L.skipBlockComment "/*" "*/"
 
--- 改行を含む空白やコメントをスキップする
-scn :: Parser ()
-scn = L.space space1 lineCmnt blockCmnt
-  where
-    lineCmnt  = L.skipLineComment "#"
-    blockCmnt = L.skipBlockComment "/*" "*/"
+-- -- 改行を含む空白やコメントをスキップする
+-- scn :: Parser ()
+-- scn = L.space space1 lineCmnt blockCmnt
+--   where
+--     lineCmnt  = L.skipLineComment "#"
+--     blockCmnt = L.skipBlockComment "/*" "*/"
 
 lexeme :: Parser a -> Parser a
 lexeme = L.lexeme sc
@@ -49,7 +50,7 @@ operator = lexeme $ some (oneOf "+-*/><")
 
 -- 予約語を読む
 rword :: String -> Parser ()
-rword w = (lexeme . try) (space >> string w *> notFollowedBy alphaNumChar)
+rword w = (lexeme . try) (space *> string w *> notFollowedBy alphaNumChar)
 
 -- 予約語のリスト
 reservedWords :: [String] -- list of reserved words
@@ -78,7 +79,7 @@ var p = meta $ do
 
 -- 与えられた文字列を読む。後ろの空白（改行を含む）をスキップする。
 symbol :: String -> Parser String
-symbol = L.symbol scn
+symbol = L.symbol sc -- scn
 
 -- 与えられた文字列を読む。後ろの空白（改行を含まない）をスキップする。
 symboln :: String -> Parser String
@@ -92,6 +93,38 @@ angles    = between (symbol "<") (symboln ">")
 brackets  = between (symbol "[") (symboln "]")
 dubquotes = between (symbol "\"") (symboln "\"")
 quotes    = between (symbol "'") (symboln "'")
+
+-- ソースコード内の位置などのメタ情報を付加
+meta :: Parser AST -> Parser ASTMeta
+meta parseAst = do
+  astSrcPos <- getSourcePos
+  ast <- parseAst
+  pure ASTMeta { astSrcPos = astSrcPos, ast = ast }
+
+-- -- 式を読む。後ろの改行の連続をスキップする
+-- astNewLine :: Parser ASTMeta
+-- astNewLine = exprAst <* many sepLine
+
+-- 改行を読む。; も改行扱いとする。
+sepLine :: Parser ()
+sepLine = () <$ some (symbol "\n" <|> symbol ";")
+
+
+-- プログラムのトップレベルを読む
+topLevels :: Parser ASTMeta
+topLevels = dbg "topLevels" $
+  meta $ do
+  asts <- many (sepLine *> topLevel)
+  pure ASTSeq { astSeq = asts }
+
+-- プログラムのトップレベルに来る表現を読む
+topLevel :: Parser ASTMeta
+topLevel = dbg "topLevel" $
+  choice [ try funDef
+         , try typeDef
+         , try exprAst
+         , term
+         ]
 
 -- 演算子とその処理。リストの先頭のほうが優先順位が高い。
 ops :: [[Operator Parser ASTMeta]]
@@ -114,14 +147,14 @@ genUnary4OpTable str = do
   meta     <- getSourcePos
   astUnary <- ASTUnary (OpLit str) <$ symbol str
   pure (\astMeta ->
-          ASTMeta { srcPos = meta
+          ASTMeta { astSrcPos = meta
                   , ast      = astUnary astMeta })
 
 genBinOp4OpTable str = do
   meta     <- getSourcePos
   astBinOp <- ASTBinOp (OpLit str) <$ symbol str
   pure (\arg0 arg1 ->
-           ASTMeta { srcPos = meta
+           ASTMeta { astSrcPos = meta
                    , ast      = astBinOp arg0 arg1 })
 
 
@@ -134,42 +167,36 @@ exprAst = dbg "exprAst" $
 term :: Parser ASTMeta
 term = dbg "term" $
   choice [ try anonFun
+         , try ifAST
          , try apply
          , arg
-         , try ifAST
-         , try funDefCase
-         , fundef
-         , typeDef ]
+         -- , try funDefCase
+         -- , funDef
+         -- , typeDef
+         ]
 
 -- 関数の引数になりうるものを読む
 arg :: Parser ASTMeta
 arg = dbg "arg" $
-  choice [ meta $ ASTDoubleLit <$> try double
-         , meta $ ASTIntLit <$> integer
+  choice [ meta $ ASTDouble <$> try double
+         , meta $ ASTInt <$> integer
          , strLit
          , var identifier
          , listLit
-         , try (parens argWithTypeSig)
-         , parens exprAst
+         , parens (try argWithTypeSig <|> exprAst)
          , seqAST ]
-
-meta :: Parser AST -> Parser ASTMeta
-meta parseAst = do
-  srcPos <- getSourcePos
-  ast <- parseAst
-  pure ASTMeta { srcPos = srcPos, ast = ast }
 
 -- 匿名関数を読む
 anonFun :: Parser ASTMeta
 anonFun = dbg "anonFun" $
-  meta $ do
+  meta $ parens $ do
   params <- some identifier
   code   <- symbol "->" *> getSourcePos
   body   <- exprAst
   sig'   <- optional (symbol ":" *> typeList)
   -- 型を省略した場合はもっとも一般的な型にしちゃう
   let sig = fromMaybe (makeGeneralType (length params)) sig'
-  pure $ ASTFunDefAnon { astType      = sig
+  pure $ ASTDefAnonFun { astType      = sig
                        , astFunParams = params
                        , astFunBody   = body }
 
@@ -200,14 +227,14 @@ strLit = dbg "strLit" $
   beginChar <- single '"' <|> single '\''
   str <- many $ noneOf [beginChar]
   _   <- symboln [beginChar]
-  pure $ ASTStrLit { astStr = str }
+  pure $ ASTStr { astStr = str }
 
 -- リストのリテラルを読む
 listLit :: Parser ASTMeta
 listLit = dbg "listLit" $
   meta $ do
   asts   <- brackets $ exprAst `sepBy` (symbol "," <|> symbol ";")
-  pure ASTListLit { astList = asts }
+  pure ASTList { astList = asts }
 
 -- -- カッコ式（カッコの中に式が一つだけある式）を読む
 -- parenAST :: Parser ASTMeta
@@ -221,22 +248,7 @@ listLit = dbg "listLit" $
 seqAST :: Parser ASTMeta
 seqAST = dbg "seqAST" $
   meta $ do
-  asts   <- braces $ many newLine *> many astNewLine
-  pure ASTSeq { astSeq = asts }
-
--- 式を読む。後ろの改行の連続をスキップする
-astNewLine :: Parser ASTMeta
-astNewLine = exprAst <* many newLine
-
--- 改行を読む。; も改行扱いとする。
-newLine :: Parser String
-newLine = symbol "\n" <|> symbol ";"
-
--- プログラムのトップレベルを読む
-topLevel :: Parser ASTMeta
-topLevel = dbg "topLevel" $
-  meta $ do
-  asts <- many newLine *> some astNewLine
+  asts   <- braces $ exprAst `sepBy` sepLine
   pure ASTSeq { astSeq = asts }
 
 -- 型定義を読む
@@ -245,7 +257,7 @@ typeDef = dbg "typeDef" $
   meta $ do
   rword "type"
   name <- var identifier <* symbol "="
-  types <- braces (memberWithType `sepBy1` symbol ",") <* many newLine
+  types <- braces (memberWithType `sepBy1` symbol ",") <* sepLine
   pure ASTTypeDef { astTypeDefName   = name
                   , astTypeDefFields = types}
 
@@ -258,38 +270,22 @@ memberWithType = dbg "memberWithType" $
   pure (member, types)
 
 -- 関数定義を読む
-fundef :: Parser ASTMeta
-fundef = dbg "fundef" $
+funDef :: Parser ASTMeta
+funDef = dbg "funDef" $
   meta $ do
   rword "fun"
   nameAST <- try (var identifier) <|> var operator
-  types'  <- optional (symbol ":" *> typeList) <* symbol "="
-  params  <- some identifier <* symbol "->"
-  body    <- exprAst
-  -- 型を省略した場合はもっとも一般的な型にしちゃう
-  let types = fromMaybe (makeGeneralType $ length params) types'
-  pure ASTFunDef { astType       = types
-                 , astFunDefName = nameAST
-                 , astFunParams  = params
-                 , astFunBody    = body }
-
--- パターンマッチを含む関数定義を読む
-funDefCase :: Parser ASTMeta
-funDefCase = dbg "funDefCase" $
-  meta $ do
-  rword "fun"
-  nameAST <- try (var identifier) <|> var operator
-  types'  <- optional (symbol ":" *> typeList) <* symbol "="
-  caseAST@ASTMeta
+  types   <- optional (symbol ":" *> typeList) <* symbol "="
+  body@ASTMeta
     { ast = ASTCase
-            { astType        = types
+            { astType        = types'
             , astCaseBranchs = matches }
-    }     <- braces $ many newLine *> caseAST types'
-  pure ASTFunDef { astType       = types
+    }     <- braces (many sepLine *> caseAST types)
+             <|> caseAST types
+  pure ASTFunDef { astType       = types'
                  , astFunDefName = nameAST
                  , astFunParams  = paramList $ paramNum matches
-                 , astFunBody    = caseAST
-                 }
+                 , astFunBody    = body }
 
 
 paramNum = length . fst3 . head
@@ -299,19 +295,19 @@ fst3 (a,_,_) = a
 caseAST :: Maybe (RecList Type) -> Parser ASTMeta
 caseAST maybeType = dbg "caseAST" $
   meta $ do
-  matches <- some matchAST
+  matches <- some matchArm
   -- 型を省略した場合はもっとも一般的な型にしちゃう
   let types = fromMaybe (makeGeneralType (paramNum matches)) maybeType
   pure ASTCase { astType        = types
                , astCaseBranchs = matches }
 
 -- パターンマッチ式を読む
-matchAST :: Parser ([ASTMeta], ASTMeta, Maybe ASTMeta)
-matchAST = dbg "matchAST" $
+matchArm :: Parser ([ASTMeta], ASTMeta, Maybe ASTMeta)
+matchArm = dbg "matchAST" $
   do
   conds <- some arg
   guard <- optional ( symbol "|" *> exprAst <* symbol "|") <* symbol "->"
-  body <- exprAst <* many newLine
+  body <- exprAst <* sepLine
   pure (conds, body, guard)
 
 
@@ -341,25 +337,26 @@ apply = dbg "apply" $
 -- 型注釈を読む
 typeList :: Parser (RecList Type)
 typeList = dbg "typeList" $
-  do
-  term1 <- typeTerm
-  terms <- many $ symbol "->" *> typeTerm
-  pure $ Elems (term1 : terms)
+  do{
+    ; term1 <- typeTerm
+    ; terms <- many $ symbol "->" *> typeTerm
+    ; pure $ Elems (term1 : terms)
+    }
 
 -- 型を表す項を読む。Int, a, [Double], (Int->String) など。
 typeTerm :: Parser (RecList Type)
 typeTerm = dbg "typeTerm" $
-  try listTerm
-  <|> (Elem <$> identifier)
-  <|> parens typeList
+  choice [ try listTerm
+         , Elem <$> identifier
+         , parens typeList ]
 
 -- リスト型を読む
 listTerm :: Parser (RecList Type)
 listTerm = dbg "listTerm" $
-  do
-  term <- brackets identifier
-  pure $ Elems [ Elem "List", Elem term ]
-
+  do{
+    ; term <- brackets identifier
+    ; pure $ Elems [ Elem "List", Elem term ]
+    }
 -- -- 現在パース中のコード位置を取得する
 -- getCodeMeta :: Parser CodeMeta
 -- getCodeMeta = do
