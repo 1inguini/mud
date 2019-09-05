@@ -71,14 +71,10 @@ data AST
                    , astFunParams  :: [Param]
                    , astFunBody    :: ASTMeta }
 
-  | ASTDefAnonFun  { astType      :: RecList Type
-                   , astFunParams :: [Param]
-                   , astFunBody   :: ASTMeta }
-
   | ASTApply       { astApplyFun  :: ASTMeta
                    , astApplyArgs :: [ASTMeta] }
 
-  | ASTCase        { astType    :: RecList Type
+  | ASTAnonFun     { astType    :: RecList Type
                    -- , astCasePattern :: [ASTMeta]
                    , astCaseBranchs ::
                        [( [ASTMeta]        -- Pattern
@@ -120,10 +116,6 @@ data Expr
   | ExprAssign      { exprAssignName :: NameExpr
                     , exprAssignVar  :: ExprMeta }
 
-  | ExprFunDefAnon  { exprType      :: RecList Type
-                    , exprFunParams :: [Param]
-                    , exprFunBody   :: ExprMeta }
-
   | ExprFun         { exprType      :: RecList Type
                     , exprFunParams :: [Param]
                     , exprFunBody   :: ExprMeta
@@ -133,7 +125,7 @@ data Expr
   | ExprApply       { exprApplyFun  :: ExprMeta
                     , exprApplyArgs :: [ExprMeta] }
 
-  | ExprCase        { exprCaseType    :: RecList Type
+  | ExprAnonFun     { exprCaseType    :: RecList Type
                     -- , exprCasePattern :: [ExprMeta]
                     , exprCaseBranchs :: [([ExprMeta],ExprMeta,Maybe ExprMeta)] }
 
