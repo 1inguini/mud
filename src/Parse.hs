@@ -68,28 +68,23 @@ reservedWords = ["fun","if","then","else","type"]
 
 -- 識別子を読む
 identifier :: Parser String
-identifier = lexeme $ identifier' >>= check
-  where
-    check x = if x `elem` reservedWords
-                then fail $ "keyword " ++ show x ++ " cannot be an identifier"
-                else pure x
-    identifier' :: Parser String
-    identifier' = do
-      firstLetter   <- lowerChar
-      middleLetters <- many (alphaNumChar <|> single '_')
-      lastLetters   <- many (oneOf "!?_'")
-      pure $ firstLetter:middleLetters ++ lastLetters
+identifier = lowerChar >>= identifier'
+
 
 -- 識別子を読む
 constrIdent :: Parser String
-constrIdent = lexeme identifier'
-  where
-    identifier' :: Parser String
-    identifier' = do
-      firstLetter   <- upperChar
-      middleLetters <- many (alphaNumChar <|> single '_')
-      lastLetters   <- many (oneOf "!?_'")
-      pure $ firstLetter:middleLetters ++ lastLetters
+constrIdent = upperChar >>= identifier'
+
+
+identifier' :: Char -> Parser String
+identifier' firstLetter = lexeme $ check =<< do
+  middleLetters <- many (alphaNumChar <|> single '_')
+  lastLetters   <- many (oneOf "!?_'")
+  pure $ firstLetter:middleLetters ++ lastLetters
+    where
+      check x = if x `elem` reservedWords
+        then fail $ "keyword " ++ show x ++ " cannot be an identifier"
+        else pure x
 
 
 var :: Parser String -> Parser ASTMeta
