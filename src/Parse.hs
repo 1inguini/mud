@@ -174,15 +174,15 @@ caseAST isMany maybeType =  dbg "caseAST" $
   let types = fromMaybe (makeGeneralType (paramNum matches)) maybeType
   pure ASTAnonFun { astType        = types
                   , astCaseBranchs = matches }
+    where
+      -- パターンマッチ式を読む
+      matchAST :: Parser ([ASTMeta], ASTMeta, Maybe ASTMeta)
+      matchAST =  dbg "matchAST" $
+        do{ conds <- some ptn
+          ; guard <- optional ( symbol "|" *> exprAst <* symbol "|")
+          ; body  <- symbol "->" *> exprAst
+          ; pure (conds, body, guard) }
 
--- パターンマッチ式を読む
-matchAST :: Parser ([ASTMeta], ASTMeta, Maybe ASTMeta)
-matchAST =  dbg "matchAST" $
-  do
-  conds <- some ptn
-  guard <- optional ( symbol "|" *> exprAst <* symbol "|")
-  body  <- symbol "->" *> seqAST
-  pure (conds, body, guard)
 
 paramNum = length . fst3 . head
 paramList n = zipWith (++) (replicate n "x") (map show (take n [1..]))
@@ -230,7 +230,7 @@ exprAst =  dbg "exprAst" $
 -- 項を読む。項は演算子の引数になるもの。
 term :: Parser ASTMeta
 term =  dbg "term" $
-  choice [ parens (try astWithTypeSig <|> exprAst <|> term)
+  choice [ try $ parens (try astWithTypeSig <|> exprAst)
          , seqAST
          , try ifAST
          , ptn ]
@@ -253,11 +253,13 @@ anonFun =  dbg "anonFun" $
   meta $ parens $ do
   ASTMeta
     { ast = fun@ASTAnonFun { astType = types }
-    }  <- caseAST True Nothing
+    }  <- parens (caseAST True Nothing)
+          <|> caseAST False Nothing
   sig' <- optional (symbol ":" *> typeList)
   -- 型を省略した場合はもっとも一般的な型にしちゃう
   let sig = fromMaybe types sig'
   pure $ fun { astType = sig }
+
 
 -- 型注釈つきの式を読む
 astWithTypeSig :: Parser ASTMeta
