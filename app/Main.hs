@@ -1,9 +1,12 @@
 module Main where
 
+import           Prelude            as P
+
 import           Lib
 import qualified Safe
 import           System.Environment (getArgs)
 import           System.IO
+
 
 main :: IO ()
 main = do

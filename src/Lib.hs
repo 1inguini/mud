@@ -5,6 +5,8 @@ import           Control.Monad.Except
 import qualified Control.Monad.Trans      as Trans
 import           Data.IORef
 import           Data.Map                 as Map hiding (foldr, take)
+import           Data.Text
+import           Data.Text.IO             as T.IO (readFile)
 import           Data.Void
 import qualified System.Console.Haskeline as Hline
 import           System.IO
@@ -23,10 +25,10 @@ import           TypeUtil
 
 -- プログラムの文字列をパースしてエラーか式を返す
 -- parseProgram :: String -> Either (ParseErrorBundle String Void) Expr
-parseProgram program = parse topLevel "<stdin>" program
+parseProgram program = parse toplevels "<stdin>" program
 
-parseString :: String -> IOThrowsError ASTMeta
-parseString program = case parseProgram program of
+parseText :: Text -> IOThrowsError ASTMeta
+parseText program = case parseProgram program of
   Left bundle -> throwError $ errorBundlePretty bundle
   Right expr  -> pure expr
 
@@ -94,7 +96,7 @@ execParse programs =
   (\program ->
      case parseProgram program of
        Left bundle -> putStrLn (errorBundlePretty bundle)
-       Right expr  -> PrettyS.pPrint expr) `mapM_` programs
+       Right expr  -> PrettyS.pPrint expr) `mapM_` (pack <$> programs)
 
 -- -- プログラムをファイルから読み、型評価し、評価する
 -- execRun :: [String] -> IO ()
@@ -162,8 +164,8 @@ execParse programs =
 -- 以下は開発用のショートカット
 
 -- プログラムの文字列をパースしてエラーか式を返す
--- pa :: String -> Either (ParseErrorBundle String Void) Expr
-pa program = parse topLevel "<stdin>" program
+-- pa :: Text -> Either (ParseErrorBundle String Void) Expr
+pa = parseProgram
 
 -- -- プログラムの文字列をパースして型評価する
 -- te :: String -> IO String
@@ -201,7 +203,7 @@ pa program = parse topLevel "<stdin>" program
 --   putStrLn output
 
 -- ファイルからプログラムを読んでパースする
-paf :: String -> IO ()
+paf :: FilePath -> IO ()
 paf file = do
-  program <- readFile file
+  program <- T.IO.readFile file
   print $ pa program
