@@ -230,27 +230,26 @@ genBinOp4OpTable str = do
 -- 式を読む
 exprAst :: Parser ASTMeta
 exprAst =  dbg "exprAst" $
-   try apply <|> makeExprParser term ops
+   makeExprParser term ops
 
 -- 項を読む。項は演算子の引数になるもの。
 term :: Parser ASTMeta
 term =  dbg "term" $
-  choice [ try ifAST
-         , try (parens astWithTypeSig)
-         , braces seqAST
-         , ptn
-         , parens (try astWithTypeSig <|> exprAst <|> term)
-         ]
+  choice [ parens (try astWithTypeSig <|> exprAst <|> term)
+         , seqAST
+         , try ifAST
+         , ptn ]
 
 -- -- パターンマッチになりうるものを読む
 ptn :: Parser ASTMeta
 ptn =  dbg "ptn" $
   choice [ meta $ ASTDouble <$> try double
          , meta $ ASTInt <$> integer
-         , var identifier
-         , var constrIdent
-         -- , listlit
-         -- , strLit
+         , try apply
+         -- , var identifier
+         -- , var constrIdent
+         , listLit
+         , strLit
          ]
 
 -- 匿名関数を読む
@@ -281,28 +280,27 @@ astWithTypeSig =  dbg "astWithTypeSig" $
 --   sig  <- symbol ":" *> typeList
 --   pure $ ASTTypeSig { astType = sig, astTypeSigVar = arg'}
 
--- -- 文字列のリテラルを読む
--- strLit :: Parser ASTMeta
--- strLit =  dbg "strLit" $
---   meta $ do
---   beginChar <- single '"' <|> single '\''
---   str <- many $ noneOf [beginChar]
---   _   <- symbol [beginChar]
---   pure $ ASTStr { astStr = str }
+-- 文字列のリテラルを読む
+strLit :: Parser ASTMeta
+strLit =  dbg "strLit" $
+  meta $ do
+  beginChar <- single '"' <|> single '\''
+  str <- many $ noneOf [beginChar]
+  _   <- symbol [beginChar]
+  pure $ ASTStr { astStr = str }
 
--- -- リストのリテラルを読む
--- listLit :: Parser ASTMeta
--- listLit =  dbg "listLit" $
---   meta $ do
---   asts <- brackets $ exprAst `sepBy` (symbol "," <|> symbol ";")
---   pure ASTList { astList = asts }
+-- リストのリテラルを読む
+listLit :: Parser ASTMeta
+listLit =  dbg "listLit" $
+  meta $ do
+  asts <- brackets $ exprAst `sepBy` (symbol "," <|> symbol ";")
+  pure ASTList { astList = asts }
 
 -- 複式（";"で区切られて連続する式）を読む
 seqAST :: Parser ASTMeta
 seqAST =  dbg "seqAST" $
   meta $ do
   asts <- braces (exprAst `endBy1` lineSep)
-          <|> (:[]) <$> exprAst
   pure ASTSeq { astSeq = asts }
 
 -- -- -- 式を読む。後ろの改行の連続をスキップする
@@ -314,17 +312,15 @@ seqAST =  dbg "seqAST" $
 -- -- newLine = symbol "\n" <|> symbol ";"
 
 
-
 -- if式を読む
 ifAST :: Parser ASTMeta
 ifAST =  dbg "ifAST" $
   meta $ do
-  -- rword "if"
-  condAST <- rword "if" *> exprAst
+  condAST <- rword "if" *> exprAst <* rword "then"
   -- rword "then"
-  thenAST <- rword "then" *> exprAst
+  thenAST <- exprAst <* rword "else"
   -- rword "else"
-  elseAST <- rword "else" *> exprAst
+  elseAST <- exprAst
   pure ASTIf { astIfCond = condAST
              , astIfThen = thenAST
              , astIfElse = elseAST }
@@ -334,7 +330,7 @@ apply :: Parser ASTMeta
 apply =  dbg "apply" $
   meta $ do
   caller <- anonFun <|> var constrIdent <|> var identifier
-  args   <- some term
+  args   <- many term
   pure ASTApply { astApplyFun  = caller
                 , astApplyArgs = args}
 
