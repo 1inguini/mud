@@ -98,6 +98,17 @@ execParse programs =
        Left bundle -> putStrLn (errorBundlePretty bundle)
        Right expr  -> PrettyS.pPrint expr) `mapM_` (pack <$> programs)
 
+
+-- パースを実行する
+execParseFile :: [String] -> IO ()
+execParseFile files =
+  (\file -> do
+      program <- T.IO.readFile file
+      case pa program of
+        Left bundle -> putStrLn (errorBundlePretty bundle)
+        Right expr  -> PrettyS.pPrint expr) `mapM_` files
+
+
 -- -- プログラムをファイルから読み、型評価し、評価する
 -- execRun :: [String] -> IO ()
 -- execRun [] = putStrLn $ "mud run: run Mud program\n"
