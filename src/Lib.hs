@@ -27,7 +27,7 @@ import           TypeUtil
 
 -- プログラムの文字列をパースしてエラーか式を返す
 -- parseProgram :: String -> Either (ParseErrorBundle String Void) Expr
-parseProgram program = parse toplevels "<stdin>" program
+parseProgram program = parse (toplevels <* eof) "<stdin>" program
 
 parseText :: Text -> IOThrowsError ASTMeta
 parseText program = case parseProgram program of
