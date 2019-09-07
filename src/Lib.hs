@@ -1,6 +1,8 @@
 -- Main に直接関係するライブラリー
 module Lib where
 
+import           Prelude                  hiding (readFile)
+
 import           Control.Monad.Except
 import qualified Control.Monad.Trans      as Trans
 import           Data.IORef
@@ -9,7 +11,7 @@ import           Data.Text
 import           Data.Text.IO             as T.IO (readFile)
 import           Data.Void
 import qualified System.Console.Haskeline as Hline
-import           System.IO
+import           System.IO                hiding (readFile)
 import           System.Timeout
 import           Text.Megaparsec
 import qualified Text.Pretty.Simple       as PrettyS
@@ -103,7 +105,7 @@ execParse programs =
 execParseFile :: [String] -> IO ()
 execParseFile files =
   (\file -> do
-      program <- T.IO.readFile file
+      program <- readFile file
       case pa program of
         Left bundle -> putStrLn (errorBundlePretty bundle)
         Right expr  -> PrettyS.pPrint expr) `mapM_` files
@@ -216,5 +218,5 @@ pa = parseProgram
 -- ファイルからプログラムを読んでパースする
 paf :: FilePath -> IO ()
 paf file = do
-  program <- T.IO.readFile file
+  program <- readFile file
   print $ pa program

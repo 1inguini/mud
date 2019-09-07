@@ -75,8 +75,8 @@ data AST
                    , astFunParams  :: [Param]
                    , astFunBody    :: ASTMeta }
 
-  | ASTApply       { astApplyFun  :: ASTMeta
-                   , astApplyArgs :: [ASTMeta] }
+  | ASTApply       { astApplyFun :: ASTMeta
+                   , astApplyArg :: ASTMeta }
 
   | ASTAnonFun     { astType    :: Types
                    -- , astCasePattern :: [ASTMeta]

@@ -85,7 +85,8 @@ symbol = L.symbol spaceConsumer
 word txt = lexeme $ chunk txt <* notFollowedBy (satisfy isAlphaNum)
 
 var :: Parser Text -> Parser ASTMeta
-var p = meta $ do
+var p = dbg "var" $
+  meta $ do
   txt <- p
   pure $ ASTVar { astVar = txt }
 
@@ -106,38 +107,46 @@ tShow = pack . show
 
 -- カッコで挟まれる表現を読む
 parens, braces, angles, brackets, dubquotes, quotes :: Parser a -> Parser a
-parens    = between (symbol "(" <* many lineSep) (many lineSep *> symbol ")")
-braces    = between (symbol "{" <* many lineSep) (many lineSep *> symbol "}")
-angles    = between (symbol "<" <* many lineSep) (many lineSep *> symbol ">")
-brackets  = between (symbol "[" <* many lineSep) (many lineSep *> symbol "]")
+parens    = between (symbol "(" <* skipSep) (skipSep *> symbol ")")
+braces    = between (symbol "{" <* skipSep) (skipSep *> symbol "}")
+angles    = between (symbol "<" <* skipSep) (skipSep *> symbol ">")
+brackets  = between (symbol "[" <* skipSep) (skipSep *> symbol "]")
 dubquotes = between (symbol "\"") (symbol "\"")
 quotes    = between (symbol "'") (symbol "'")
 
 -- 文の区切り文字を読む
 lineSep :: Parser ()
-lineSep = void $ lexeme $ satisfy (`elem` sepChars)
+lineSep = void $ lexeme $ takeWhile1P (Just "one or more line seperator")
+          (`elem` sepChars)
+
+-- 文の区切り文字を読み飛ばす
+skipSep :: Parser ()
+skipSep = void $ lexeme $ takeWhileP (Just "zero or more line seperator")
+          (`elem` sepChars)
+
 
 -- プログラムのトップレベルを読む
 toplevels :: Parser ASTMeta
 toplevels = dbg "toplevels" $
   meta $ do
-  _    <- many lineSep
-  tops <- (meta (ASTSeq {astSeq = [] } <$ eof)
-            <|> toplevel)
-          `sepBy1` some lineSep
+  _    <- skipSep
+  tops <- (meta (ASTSeq {astSeq = [] } <$ dbg "eof" eof)
+            <|> toplevel) `sepBy1` lineSep
   pure ASTSeq {astSeq = tops}
 
 toplevel :: Parser ASTMeta
 toplevel = dbg "toplevel" $
-  choice [ funDef
-         , typeDef
-         , exprAST ]
+  choice [ -- funDef
+         -- , typeDef
+         -- ,
+           exprAST ]
 
 -- 演算子とその処理。リストの先頭のほうが優先順位が高い。
 ops :: [[Operator Parser ASTMeta]]
-ops = [ Prefix . genUnary4OpTable <$> ["-"]
+ops = [ [Prefix apply]
+      , Prefix . genUnary4OpTable <$> ["-"]
       , InfixR . genBinOp4OpTable <$> ["++", "**"]
-      , [ InfixL (genBinOp4OpTable "." <* notFollowedBy integer) ]
+      , [InfixL (genBinOp4OpTable "." <* notFollowedBy integer)]
       , InfixL . genBinOp4OpTable <$> ["*", "/"]
       , InfixL . genBinOp4OpTable <$> ["+", "-"]
       , InfixL . genBinOp4OpTable <$> [ "<="
@@ -150,6 +159,7 @@ ops = [ Prefix . genUnary4OpTable <$> ["-"]
       , InfixR . genBinOp4OpTable <$> ["="]
       ]
 
+genUnary4OpTable :: Text -> Parser (ASTMeta -> ASTMeta)
 genUnary4OpTable txt = do
   meta     <- getSourcePos
   astUnary <- ASTUnary (OpLit txt) <$ symbol txt
@@ -157,13 +167,22 @@ genUnary4OpTable txt = do
            ASTMeta { astSrcPos = meta
                    , ast       = astUnary astMeta }
 
-
+genBinOp4OpTable :: Text -> Parser (ASTMeta -> ASTMeta -> ASTMeta)
 genBinOp4OpTable txt = do
   meta     <- getSourcePos
   astBinOp <- ASTBinOp (OpLit txt) <$ symbol txt
   pure $ \arg0 arg1 ->
            ASTMeta { astSrcPos = meta
                    , ast      = astBinOp arg0 arg1 }
+
+-- 関数適用を読む
+apply :: Parser (ASTMeta -> ASTMeta)
+apply = do
+  meta   <- getSourcePos
+  caller <- anonFun <|> var constrIdent <|> var identifier
+  pure $ \arg -> ASTMeta { astSrcPos = meta
+                         , ast = ASTApply { astApplyFun = caller
+                                          , astApplyArg = arg } }
 
 
 -- 式を読む
@@ -175,10 +194,10 @@ exprAST =  dbg "exprAST" $
 -- 項を読む。項は演算子の引数になるもの。
 term :: Parser ASTMeta
 term = dbg "term" $
-  choice [ try anonFun
-         , apply
-         , try ptn
-         , braces seqAST
+  choice [ -- try anonFun
+         -- ,
+           try ptn
+         -- , braces seqAST
          , parens exprAST ]
 
 
@@ -186,11 +205,11 @@ term = dbg "term" $
 ptn :: Parser ASTMeta
 ptn = dbg "ptn" $
   choice [ list
-         , meta $ ASTDouble <$> try double
-         , meta $ ASTInt <$> integer
+         , dbg "double" $ meta $ ASTDouble <$> try double
+         , dbg "integer" $ meta $ ASTInt <$> integer
          , var identifier
          , var constrIdent
-         , try $ parens (ptn <|> applyConstr) ]
+         , try $ parens ptn ]
 
 
 -- 型定義を読む
@@ -247,7 +266,7 @@ caseAST :: Bool -> Maybe (RecList Type) -> Parser ASTMeta
 caseAST isMany maybeType =  dbg "caseAST" $
   meta $ do
   matches <- if isMany
-             then matchAST `endBy1` some lineSep
+             then matchAST `endBy1` lineSep
              else (:[]) <$> matchAST
   -- 型を省略した場合はもっとも一般的な型にしちゃう
   let types = fromMaybe (makeGeneralType (paramNum matches)) maybeType
@@ -278,7 +297,7 @@ fst3 (a,_,_) = a
 seqAST :: Parser ASTMeta
 seqAST =  dbg "seqAST" $
   meta $ do
-  asts <- braces (var identifier `sepBy` lineSep)
+  asts <- braces (exprAST `sepBy` lineSep)
   pure ASTSeq { astSeq = asts }
 
 -- 式を読む。後ろの改行の連続をスキップする
@@ -296,24 +315,15 @@ seqAST =  dbg "seqAST" $
 
 -- if式を読む
 
--- 関数適用を読む
-apply :: Parser ASTMeta
-apply =  dbg "apply" $
-  meta $ do
-  caller <- anonFun <|> var constrIdent <|> var identifier
-  args   <- some exprAST
-  pure ASTApply { astApplyFun  = caller
-                , astApplyArgs = args }
-
 
 -- パターンマッチの左辺になる関数の適用を読む
 applyConstr :: Parser ASTMeta
 applyConstr =  dbg "apply" $
   meta $ do
   caller <- var constrIdent
-  args   <- many ptn
+  args   <- ptn
   pure ASTApply { astApplyFun  = caller
-                , astApplyArgs = args }
+                , astApplyArg = args }
 
 -- 型注釈を読む
 
