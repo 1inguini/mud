@@ -27,10 +27,10 @@ import           TypeUtil
 
 -- プログラムの文字列をパースしてエラーか式を返す
 -- parseProgram :: String -> Either (ParseErrorBundle String Void) Expr
-parseProgram program = parse (toplevels <* eof) "<stdin>" program
+parseProgram filepath program = parse (toplevels <* eof) filepath program
 
 parseText :: Text -> IOThrowsError ASTMeta
-parseText program = case parseProgram program of
+parseText program = case parseProgram "<stdin>" program of
   Left bundle -> throwError $ errorBundlePretty bundle
   Right expr  -> pure expr
 
@@ -96,7 +96,7 @@ help = putStrLn $ "Mud is a functional programming language that supports multip
 execParse :: [String] -> IO ()
 execParse programs =
   (\program ->
-     case parseProgram program of
+     case pa program of
        Left bundle -> putStrLn (errorBundlePretty bundle)
        Right expr  -> PrettyS.pPrint expr) `mapM_` (pack <$> programs)
 
@@ -106,7 +106,7 @@ execParseFile :: [String] -> IO ()
 execParseFile files =
   (\file -> do
       program <- readFile file
-      case pa program of
+      case parseProgram file program of
         Left bundle -> putStrLn (errorBundlePretty bundle)
         Right expr  -> PrettyS.pPrint expr) `mapM_` files
 
@@ -178,7 +178,7 @@ execParseFile files =
 
 -- プログラムの文字列をパースしてエラーか式を返す
 -- pa :: Text -> Either (ParseErrorBundle String Void) Expr
-pa = parseProgram
+pa = parseProgram "<stdin>"
 
 -- -- プログラムの文字列をパースして型評価する
 -- te :: String -> IO String
@@ -219,4 +219,4 @@ pa = parseProgram
 paf :: FilePath -> IO ()
 paf file = do
   program <- readFile file
-  print $ pa program
+  print $ parseProgram file program

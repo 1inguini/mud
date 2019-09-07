@@ -124,6 +124,12 @@ skipSep :: Parser ()
 skipSep = skipMany $ lexeme $ satisfy (`elem` sepChars)
 
 
+-- programParser :: FilePath -> Parser ASTMeta
+-- programParser filepath = do
+--   updateParserState $ \st@State { statePosState = pos } ->
+--     st { statePosState = pos { pstateSourcePos = initialPos filepath} }
+--   toplevels
+
 -- プログラムのトップレベルを読む
 toplevels :: Parser ASTMeta
 toplevels = -- dbg "toplevels" $
@@ -347,14 +353,15 @@ str = -- dbg "str" $
 -- 型注釈を読む
 typeSig :: Parser Types
 typeSig =  -- dbg "typeList" $
-  Elems <$> (symbol ":" *> typeTerm `sepBy` symbol "->")
+  symbol ":" *> types
   where
+    types = Elems <$> (typeTerm `sepBy` symbol "->")
     -- 型を表す項を読む。Int, a, [Double], (Int->String) など。
     typeTerm :: Parser Types
     typeTerm =  -- dbg "typeTerm" $
       choice [ Elem <$> (constrIdent <|> identifier)
              , listTerm
-             , parens typeSig ]
+             , parens types ]
     -- リスト型を読む
     listTerm :: Parser Types
     listTerm =  -- dbg "listTerm" $
