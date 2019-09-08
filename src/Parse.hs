@@ -88,6 +88,7 @@ symbol = L.symbol spaceConsumer
 word txt = between skipSep skipSep $ lexeme $
            chunk txt <* notFollowedBy (satisfy isAlphaNum)
 
+
 var :: Parser Text -> Parser ASTMeta
 var p = -- dbg "var" $
   meta $ do
@@ -112,7 +113,7 @@ tShow = pack . show
 -- カッコで挟まれる表現を読む
 parens, braces, angles, brackets, dubquotes, quotes :: Parser a -> Parser a
 parens    = between (symbol "(" <* skipSep) (symbol ")")
-braces    = between (symbol "{" <* skipSep) (symbol "}")
+braces    = between (symbol "{" <* skipSep) (skipSep *> symbol "}")
 angles    = between (symbol "<" <* skipSep) (symbol ">")
 brackets  = between (symbol "[" <* skipSep) (symbol "]")
 dubquotes = between (symbol "\"") (symbol "\"")
@@ -260,7 +261,7 @@ typeDef :: Parser ASTMeta
 typeDef =  -- dbg "typeDef" $
   meta $ do
   name  <- word "type" *> var constrIdent <* symbol "="
-  types <- braces (memberWithType `sepBy1` symbol ",")
+  types <- braces (memberWithType `sepEndBy` (symbol "," <* skipSep))
   pure ASTTypeDef { astTypeDefName   = name
                   , astTypeDefFields = types }
     where
@@ -271,18 +272,6 @@ typeDef =  -- dbg "typeDef" $
           ; types  <- typeSig
           ; pure (member, types) }
 
-
--- 匿名関数を読む
-anonFun :: Parser ASTMeta
-anonFun =  -- dbg "anonFun" $
-  meta $ do
-  -- パターンマッチ式を読む
-  conds <- some ptn
-  guard <- optional (symbol "|" *> exprAST <* symbol "|")
-  body  <- symbol "->" *> exprAST
-  pure ASTAnonFun { astPattern = conds
-                  , astBody    = body
-                  , astGuard   = guard}
 
 
 -- パターンマッチを含む関数定義を読む
@@ -300,17 +289,29 @@ funDef =  -- dbg "funDef" $
                  , astFunDefName = nameAST
                  , astFunParams  = paramList $ paramNum body
                  , astFunBody    = body }
+    where
+      paramNum :: [ASTMeta] -> Int
+      paramNum arms =
+        maybe 0 (length . astPattern) $ find isAnonFun $ ast <$> arms
 
-paramNum :: [ASTMeta] -> Int
-paramNum arms =
-  maybe 0 (length . astPattern) $ find isAnonFun $ ast <$> arms
-  where
-    isAnonFun ASTAnonFun {} = True
-    isAnonFun _             = False
-paramList :: Int -> [Text]
-paramList n =
-  zipWith (<>) (replicate n "x") (tShow <$> take n [1..])
+      isAnonFun ASTAnonFun {} = True
+      isAnonFun _             = False
 
+      paramList :: Int -> [Text]
+      paramList n =
+        zipWith (<>) (replicate n "x") (tShow <$> take n [1..])
+
+-- 匿名関数を読む
+anonFun :: Parser ASTMeta
+anonFun =  -- dbg "anonFun" $
+  meta $ do
+  -- パターンマッチ式を読む
+  conds <- some ptn
+  guard <- optional (symbol "|" *> exprAST <* symbol "|")
+  body  <- symbol "->" *> exprAST
+  pure ASTAnonFun { astPattern = conds
+                  , astBody    = body
+                  , astGuard   = guard}
 
 anonFuns :: Parser ASTMeta
 anonFuns = -- dbg "anonFuns" $
@@ -363,8 +364,10 @@ ifAST =  -- dbg "ifAST" $
 list :: Parser ASTMeta
 list = -- dbg "list" $
   meta $ do
-  ls <- brackets $ exprAST `sepBy` choice (symbol <$> [",", ";"])
+  ls <- brackets $ exprAST `sepBy` choice (symSkipSep <$> [",", ";"])
   pure ASTList { astList = ls }
+  where
+    symSkipSep = L.symbol skipSep
 
 
 -- 文字列のリテラルを読む
