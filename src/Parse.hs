@@ -22,15 +22,20 @@ import           RecList
 
 type Parser = Parsec Void Text
 
+
+spaceConsumer, lineCmnt, blockCmnt  :: Parser ()
+
 -- space consumer。空白やコメントをスキップする。改行はスキップしない。
-spaceConsumer :: Parser ()
 spaceConsumer = L.space spaceOrTab1 lineCmnt blockCmnt
   where
     spaceOrTab1 = void $ takeWhile1P (Just "white space") (\c -> isSpace c && c /= '\n')
 
-lineCmnt, blockCmnt :: Parser ()
+-- 行コメントを読み飛ばす
 lineCmnt  = L.skipLineComment "#"
+
+-- ブロックコメントを読み飛ばす
 blockCmnt = L.skipBlockComment "/*" "*/"
+
 
 lexeme :: Parser a -> Parser a
 lexeme = L.lexeme spaceConsumer
@@ -111,13 +116,11 @@ tShow = pack . show
 
 
 -- カッコで挟まれる表現を読む
-parens, braces, angles, brackets, dubquotes, quotes :: Parser a -> Parser a
-parens    = between (symbol "(" <* skipSep) (symbol ")")
-braces    = between (symbol "{" <* skipSep) (skipSep *> symbol "}")
-angles    = between (symbol "<" <* skipSep) (symbol ">")
-brackets  = between (symbol "[" <* skipSep) (symbol "]")
-dubquotes = between (symbol "\"") (symbol "\"")
-quotes    = between (symbol "'") (symbol "'")
+parens, braces, angles, brackets :: Parser a -> Parser a
+parens    = between (symbol "(" *> skipSep) (skipSep <* symbol ")")
+braces    = between (symbol "{" *> skipSep) (skipSep <* symbol "}")
+brackets  = between (symbol "[" *> skipSep) (skipSep <* symbol "]")
+angles    = between (symbol "<") (symbol ">")
 
 -- 文の区切り文字を読む
 lineSep :: Parser ()
@@ -293,10 +296,8 @@ funDef =  -- dbg "funDef" $
       paramNum :: [ASTMeta] -> Int
       paramNum arms =
         maybe 0 (length . astPattern) $ find isAnonFun $ ast <$> arms
-
       isAnonFun ASTAnonFun {} = True
       isAnonFun _             = False
-
       paramList :: Int -> [Text]
       paramList n =
         zipWith (<>) (replicate n "x") (tShow <$> take n [1..])
@@ -364,10 +365,11 @@ ifAST =  -- dbg "ifAST" $
 list :: Parser ASTMeta
 list = -- dbg "list" $
   meta $ do
-  ls <- brackets $ exprAST `sepBy` choice (symSkipSep <$> [",", ";"])
+  ls <- brackets $ (exprAST <* C.space) `sepBy` seperator
   pure ASTList { astList = ls }
   where
-    symSkipSep = L.symbol skipSep
+    seperator = L.lexeme (L.space C.space1 lineCmnt blockCmnt)
+                $ oneOf (",;" :: [Char])
 
 
 -- 文字列のリテラルを読む
