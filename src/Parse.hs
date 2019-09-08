@@ -27,8 +27,10 @@ spaceConsumer :: Parser ()
 spaceConsumer = L.space spaceOrTab1 lineCmnt blockCmnt
   where
     spaceOrTab1 = void $ takeWhile1P (Just "white space") (\c -> isSpace c && c /= '\n')
-    lineCmnt  = L.skipLineComment "#"
-    blockCmnt = L.skipBlockComment "/*" "*/"
+
+lineCmnt, blockCmnt :: Parser ()
+lineCmnt  = L.skipLineComment "#"
+blockCmnt = L.skipBlockComment "/*" "*/"
 
 lexeme :: Parser a -> Parser a
 lexeme = L.lexeme spaceConsumer
@@ -122,7 +124,10 @@ lineSep = skipSome $ lexeme $ satisfy (`elem` sepChars)
 
 -- 文の区切り文字を読み飛ばす
 skipSep :: Parser ()
-skipSep = skipMany $ lexeme $ satisfy (`elem` sepChars)
+skipSep = L.space spaceOrLineSep lineCmnt blockCmnt
+  where
+    spaceOrLineSep = void $
+      takeWhile1P (Just "line seperator") (\c -> isSpace c || c `elem` sepChars)
 
 
 -- programParser :: FilePath -> Parser ASTMeta
