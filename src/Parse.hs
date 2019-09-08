@@ -163,7 +163,7 @@ term = dbg "term" $
          , braces seqAST
          , parens $ choice
            [ try astWithTypeSig
-           , try anonFuns
+           -- , try anonFuns
            , exprAST ] ]
 
 
