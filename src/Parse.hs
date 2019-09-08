@@ -6,6 +6,7 @@ import           Control.Arrow                  ((&&&), (***), (>>>))
 import           Control.Monad                  (join, void)
 import           Control.Monad.Combinators.Expr
 import           Data.Char
+import           Data.List                      (find)
 import           Data.Maybe
 import           Data.Text                      (Text, cons, pack)
 import           Data.Void
@@ -145,6 +146,27 @@ toplevel = -- dbg "toplevel" $
          , typeDef
          , exprAST ]
 
+-- 項を読む。項は演算子の引数になるもの。
+term :: Parser ASTMeta
+term = -- dbg "term" $
+  choice [ try anonFun
+         , try ifAST
+         , try ptn
+         , braces seqAST
+         , parens (try anonFuns <|> exprAST) ]
+
+
+-- パターンマッチの左辺値になるもの
+ptn :: Parser ASTMeta
+ptn = -- dbg "ptn" $
+  choice [ list
+         , str
+         , meta $ ASTDouble <$> try double
+         , meta $ ASTInt <$> integer
+         , var identifier
+         , var constrIdent
+         , try $ parens ptn ]
+
 -- 演算子とその処理。リストの先頭のほうが優先順位が高い。
 ops :: [[Operator Parser ASTMeta]]
 ops = [ [InfixL apply]
@@ -197,28 +219,6 @@ exprAST =  -- dbg "exprAST" $
    makeExprParser term ops
 
 
--- 項を読む。項は演算子の引数になるもの。
-term :: Parser ASTMeta
-term = -- dbg "term" $
-  choice [ try anonFun
-         , try ifAST
-         , try ptn
-         , seqAST
-         , parens exprAST ]
-
-
--- パターンマッチの左辺値になるもの
-ptn :: Parser ASTMeta
-ptn = -- dbg "ptn" $
-  choice [ list
-         , str
-         , meta $ ASTDouble <$> try double
-         , meta $ ASTInt <$> integer
-         , var identifier
-         , var constrIdent
-         , try $ parens ptn ]
-
-
 -- 型定義を読む
 typeDef :: Parser ASTMeta
 typeDef =  -- dbg "typeDef" $
@@ -240,57 +240,47 @@ typeDef =  -- dbg "typeDef" $
 funDef :: Parser ASTMeta
 funDef =  -- dbg "funDef" $
   meta $ do
-  nameAST <- word "fun" *> (var identifier <|> var operator)
-  types'  <- optional typeSig
-  _       <- symbol "="
-  caseAST@ASTMeta
-    { ast = ASTAnonFun
-            { astType        = types
-            , astCaseBranchs = matches }
-    }     <- braces (caseAST True types')
-             <|> caseAST False types'
+  nameAST   <- word "fun" *> (var identifier <|> var operator)
+  maybeType <- optional typeSig
+  _         <- symbol "="
+  body      <- braces (anonFun -- <|> funDef
+                        `sepEndBy` lineSep)
+               <|> (:[]) <$> anonFun
+  let types = fromMaybe (makeGeneralType (paramNum body)) maybeType
   pure ASTFunDef { astType       = types
                  , astFunDefName = nameAST
-                 , astFunParams  = paramList $ paramNum matches
-                 , astFunBody    = caseAST }
+                 , astFunParams  = paramList $ paramNum body
+                 , astFunBody    = body }
+
+paramNum :: [ASTMeta] -> Int
+paramNum arms =
+  maybe 0 (length . astPattern) $ find isAnonFun $ ast <$> arms
+  where
+    isAnonFun ASTAnonFun {} = True
+    isAnonFun _             = False
+paramList :: Int -> [Text]
+paramList n =
+  zipWith (<>) (replicate n "x") (tShow <$> take n [1..])
+
 
 -- 匿名関数を読む
 anonFun :: Parser ASTMeta
 anonFun =  -- dbg "anonFun" $
   meta $ do
-  ASTMeta
-    { ast = fun@ASTAnonFun { astType = types }
-    }  <- parens (caseAST True Nothing)
-          <|> caseAST False Nothing
-  sig' <- optional typeSig
-  -- 型を省略した場合はもっとも一般的な型にしちゃう
-  let sig = fromMaybe types sig'
-  pure $ fun { astType = sig }
+  -- パターンマッチ式を読む
+  conds <- some ptn
+  guard <- optional ( symbol "|" *> exprAST <* symbol "|")
+  body  <- symbol "->" *> exprAST
+  pure ASTAnonFun { astPattern = conds
+                  , astBody    = body
+                  , astGuard   = guard}
 
-
--- パターンマッチ式を読む
-caseAST :: Bool -> Maybe (RecList Type) -> Parser ASTMeta
-caseAST isMany maybeType =  -- dbg "caseAST" $
+anonFuns :: Parser ASTMeta
+anonFuns = -- dbg "anonFuns" $
   meta $ do
-  matches <- if isMany
-             then matchAST `sepEndBy` lineSep
-             else (:[]) <$> matchAST
-  -- 型を省略した場合はもっとも一般的な型にしちゃう
-  let types = fromMaybe (makeGeneralType (paramNum matches)) maybeType
-  pure ASTAnonFun { astType        = types
-                  , astCaseBranchs = matches }
-    where
-      -- パターンマッチ式を読む
-      matchAST :: Parser ([ASTMeta], ASTMeta, Maybe ASTMeta)
-      matchAST =  -- dbg "matchAST" $
-        do{ conds <- some ptn
-          ; guard <- optional ( symbol "|" *> exprAST <* symbol "|")
-          ; body  <- symbol "->" *> exprAST
-          ; pure (conds, body, guard) }
+  anons <- anonFun `sepEndBy` lineSep
+  pure ASTSeq { astSeq = anons }
 
-paramNum arms = maybe 1 (length . fst3) $ headMay arms
-paramList n = zipWith (<>) (replicate n "x") (tShow <$> take n [1..])
-fst3 (a,_,_) = a
 
 
 -- 型注釈つきの式を読む
@@ -304,7 +294,7 @@ fst3 (a,_,_) = a
 seqAST :: Parser ASTMeta
 seqAST =  -- dbg "seqAST" $
   meta $ do
-  asts <- braces (exprAST `sepEndBy` lineSep)
+  asts <- toplevel `sepEndBy` lineSep
   pure ASTSeq { astSeq = asts }
 
 

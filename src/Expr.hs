@@ -73,18 +73,14 @@ data AST
   | ASTFunDef      { astType       :: Types
                    , astFunDefName :: NameAST
                    , astFunParams  :: [Param]
-                   , astFunBody    :: ASTMeta }
+                   , astFunBody    :: [ASTMeta] }
 
   | ASTApply       { astApplyFun :: ASTMeta
                    , astApplyArg :: ASTMeta }
 
-  | ASTAnonFun     { astType    :: Types
-                   -- , astCasePattern :: [ASTMeta]
-                   , astCaseBranchs ::
-                       [( [ASTMeta]        -- Pattern
-                        , ASTMeta          -- expr to exec when matched
-                        , Maybe ASTMeta )] -- guard
-                   }
+  | ASTAnonFun     { astPattern :: [ASTMeta]
+                   , astBody    :: ASTMeta -- expr to exec when matched
+                   , astGuard   :: Maybe ASTMeta }
 
   | ASTIf          { astIfCond :: ASTMeta
                    , astIfThen :: ASTMeta
