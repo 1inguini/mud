@@ -49,7 +49,8 @@ instance Show ExprMeta where
 type Types = RecList Type
 
 data AST
-  = ASTInt    { astInt  :: Integer }
+  = ASTComment Text
+  | ASTInt    { astInt  :: Integer }
   | ASTDouble { astDub  :: Double }
   | ASTStr    { astStr  :: Text}
   | ASTList   { astList :: [ASTMeta] }
