@@ -48,6 +48,19 @@ instance Show ExprMeta where
 
 type Types = RecList Type
 
+data Assoc = InfixR
+           | InfixL
+           | Prefix
+           -- | Postfix
+           deriving (Eq, Show)
+
+data AssocStr = StrongerThan Op
+              | EqualTo      Op
+              | WeakerThan   Op
+              deriving (Show, Eq)
+
+newtype Op = OpLit Text deriving (Eq, Show)
+
 data AST
   = ASTComment Text
   | ASTInt    { astInt  :: Integer }
@@ -66,7 +79,11 @@ data AST
   | ASTUnary       { astOp  :: Op
                    , astArg :: ASTMeta }
 
-  | ASTSeq         { astSeq :: [ASTMeta] }
+  | ASTSeq         { -- astOpTable :: [Map Op Assoc]
+                   -- ,
+                     astSeq     :: [ASTMeta] }
+
+  | ASTAnons       { astAnons :: [ASTMeta] }
 
   | ASTAssign      { astAssignName :: NameAST
                    , astAssignVar  :: ASTMeta }
@@ -75,6 +92,13 @@ data AST
                    , astFunDefName :: NameAST
                    , astFunParams  :: [Param]
                    , astFunBody    :: [ASTMeta] }
+
+  | ASTOpDef       { astType      :: Types
+                   , astOpDefName :: NameAST
+                   , astOpAssoc   :: Maybe ( Bool -- is Right Assoc?
+                                           , AssocStr)
+                   , astOpParams  :: [Param]
+                   , astOpBody    :: [ASTMeta] }
 
   | ASTApply       { astApplyFun :: ASTMeta
                    , astApplyArg :: ASTMeta }
@@ -144,9 +168,6 @@ data Expr
   -- | ExprCall        { exprType        :: Types
   --                   , exprCallFunName :: Name }
   deriving (Eq, Show)
-
-newtype Op = OpLit Text
-           deriving (Eq, Show)
 
 -- instance Eq AST where
 --   (ASTIntLit i1) == (ASTIntLit i2) = i1 == i2

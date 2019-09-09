@@ -4,9 +4,10 @@ module Parse where
 
 import           Control.Arrow                  ((&&&), (***), (>>>))
 import           Control.Monad                  (join, void)
-import           Control.Monad.Combinators.Expr
+import qualified Control.Monad.Combinators.Expr as Comb
 import           Data.Char
 import           Data.List                      (find)
+import           Data.Map                       (Map, fromList, toDescList)
 import           Data.Maybe
 import           Data.Text                      (Text, cons, pack)
 import           Data.Void
@@ -21,7 +22,7 @@ import           Expr
 import           RecList
 
 type Parser = Parsec Void Text
-
+type OpTable = [[Comb.Operator Parser ASTMeta]]
 
 spaceConsumer, lineCmnt, blockCmnt  :: Parser ()
 
@@ -95,7 +96,7 @@ word txt = between skipSep skipSep $ lexeme $
 
 
 var :: Parser Text -> Parser ASTMeta
-var p = -- dbg "var" $
+var p = dbg "var" $
   meta $ do
   txt <- p
   pure $ ASTVar { astVar = txt }
@@ -136,38 +137,40 @@ skipSep = L.space spaceOrLineSep lineCmnt blockCmnt
 
 -- プログラムのトップレベルを読む
 toplevels :: Parser ASTMeta
-toplevels = -- dbg "toplevels" $
+toplevels = dbg "toplevels" $
   meta $ do
   skipSep
-  tops <- toplevel `sepEndBy` lineSep
+  tops <- toplevel -- (opMaps2OpTables defOpMaps)
+    `sepEndBy` lineSep
   pure ASTSeq { astSeq = tops }
 
 
-toplevel :: Parser ASTMeta
-toplevel = -- dbg "toplevel" $
+-- toplevel :: OpTable -> Parser ASTMeta
+toplevel = dbg "toplevel" $
   -- exprAST
-  choice [ funDef
+  choice [ opDef
+         -- , funDef
          , typeDef
          , exprAST ]
 
 
 -- 項を読む。項は演算子の引数になるもの。
-term :: Parser ASTMeta
-term = -- dbg "term" $
+-- term :: OpTable -> Parser ASTMeta
+term = dbg "term" $
   choice [ try anonFun
          , try ifAST
          , try ptn
          , braces seqAST
          , parens $ choice
            [ -- try astWithTypeSig
-           -- , try anonFuns
            -- ,
-           exprAST ] ]
+           try anonFuns
+           , exprAST ] ]
 
 
 -- パターンマッチの左辺値になるもの
 ptn :: Parser ASTMeta
-ptn = -- dbg "ptn" $
+ptn = dbg "ptn" $
   choice [ list
          , str
          , meta $ ASTDouble <$> try double
@@ -177,33 +180,98 @@ ptn = -- dbg "ptn" $
          , try $ parens ptn ]
 
 
--- 演算子とその処理。リストの先頭のほうが優先順位が高い。
-ops :: [[Operator Parser ASTMeta]]
-ops = [ [InfixL apply]
-      , Prefix . genUnary4OpTable <$> ["-"]
-      , [InfixL (genBinOp4OpTable "." <* notFollowedBy integer)]
-      -- , InfixR . genBinOp4OpTable <$> ["++", "**"]
-      , InfixL . genBinOp4OpTable <$> ["*", "/"]
-      , InfixL . genBinOp4OpTable <$> ["+", "-"]
-      , InfixL . genBinOp4OpTable <$> [ "<="
-                                      , "=>"
-                                      , "<"
-                                      , ">" ]
-      , InfixR . genBinOp4OpTable <$> ["=="]
-      , InfixL . genBinOp4OpTable <$> ["&&"]
-      , InfixL . genBinOp4OpTable <$> ["||"]
-      , [Postfix astWithTypeSig]
-      , InfixR . genBinOp4OpTable <$> ["="]
-      ]
+genOpTable :: Parser OpTable
+genOpTable = undefined
+
+-- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
+defOpMaps :: [Map Text Assoc]
+defOpMaps = fromList <$>
+  [ [("-", Prefix)
+    -- ("°", Postfix)
+    ]
+  -- 関数適用はここ
+  -- "."演算子はここ
+  , flip (,) InfixL <$> ["*", "/"]
+  , flip (,) InfixL <$> ["+", "-"]
+  , flip (,) InfixL <$> [ "<=", "=>", "<", ">" ]
+  , flip (,) InfixR <$> ["=="]
+  , flip (,) InfixL <$> ["&&"]
+  , flip (,) InfixL <$> ["||"]
+  -- 型注釈はここ
+  -- "="演算子(変数定義)はここ
+  ]
 
 
-genUnary4OpTable :: Text -> Parser (ASTMeta -> ASTMeta)
-genUnary4OpTable txt = do
+opMaps2OpTables :: [Map Text Assoc] -> OpTable
+opMaps2OpTables opMaps = (tup2ComBOp <$>) <$> (toDescList <$> opMaps)
+  where
+    tup2ComBOp :: (Text, Assoc) -> Comb.Operator Parser ASTMeta
+    tup2ComBOp (opTxt, InfixR) = Comb.InfixR (genBinOp4OpTable opTxt)
+    tup2ComBOp (opTxt, InfixL) = Comb.InfixL (genBinOp4OpTable opTxt)
+    tup2ComBOp (opTxt, Prefix) = Comb.Prefix (genPrefix4OpTable opTxt)
+
+
+exprAST :: Parser ASTMeta
+exprAST =
+  Comb.makeExprParser (term) newOpMaps
+  where
+    insertNonOp :: OpTable -> OpTable
+    insertNonOp (prefix:infixs) =
+      prefix:[Comb.InfixL apply]:infixs ++ opsTail
+    insertNonOp [] = [Comb.InfixL apply]:opsTail
+    opsTail = [ [Comb.Postfix astWithTypeSig]
+              , [Comb.InfixR $ genBinOp4OpTable "="] ]
+    newOpMaps = insertNonOp $ opMaps2OpTables defOpMaps
+
+
+-- exprAST :: OpTable -> Parser ASTMeta
+-- exprAST opMaps =
+--   Comb.makeExprParser (term newOpMaps) newOpMaps
+--   where
+--     insertNonOp :: OpTable -> OpTable
+--     insertNonOp (prefix:infixs) =
+--       prefix:[Comb.InfixL apply]:infixs ++ opsTail
+--     insertNonOp [] = [Comb.InfixL apply]:opsTail
+--     opsTail = [ [Comb.Postfix astWithTypeSig]
+--               , [Comb.InfixR $ genBinOp4OpTable "="] ]
+--     newOpMaps = insertNonOp opMaps
+
+
+
+-- -- 演算子とその処理。リストの先頭のほうが優先順位が高い。
+-- ops :: OpTable
+-- ops = [ [Comb.InfixL apply]
+--       , Comb.Prefix . genPrefix4OpTable <$> ["-"]
+--       , [Comb.InfixL (genBinOp4OpTable "." <* notFollowedBy integer)]
+--       -- , InfixR . genBinOp4OpTable <$> ["++", "**"]
+--       , Comb.InfixL . genBinOp4OpTable <$> ["*", "/"]
+--       , Comb.InfixL . genBinOp4OpTable <$> ["+", "-"]
+--       , Comb.InfixL . genBinOp4OpTable <$> [ "<="
+--                                       , "=>"
+--                                       , "<"
+--                                       , ">" ]
+--       , Comb.InfixR . genBinOp4OpTable <$> ["=="]
+--       , Comb.InfixL . genBinOp4OpTable <$> ["&&"]
+--       , Comb.InfixL . genBinOp4OpTable <$> ["||"]
+--       , [Comb.Postfix astWithTypeSig]
+--       , Comb.InfixR . genBinOp4OpTable <$> ["="] ]
+
+
+genPrefix4OpTable :: Text -> Parser (ASTMeta -> ASTMeta)
+genPrefix4OpTable txt = do
   meta     <- getSourcePos
-  astUnary <- ASTUnary (OpLit txt) <$ spaceConsumer <* chunk txt
+  astUnary <- ASTUnary (OpLit txt) <$ chunk txt
   pure $ \astMeta ->
            ASTMeta { astSrcPos = meta
                    , ast       = astUnary astMeta }
+
+-- genPostfix4OpTable :: Text -> Parser (ASTMeta -> ASTMeta)
+-- genPostfix4OpTable txt = do
+--   meta     <- getSourcePos
+--   astUnary <- ASTUnary (OpLit txt) <$ chunk txt
+--   pure $ \astMeta ->
+--            ASTMeta { astSrcPos = meta
+--                    , ast       = astUnary astMeta }
 
 
 genBinOp4OpTable :: Text -> Parser (ASTMeta -> ASTMeta -> ASTMeta)
@@ -235,15 +303,15 @@ astWithTypeSig = do
                                , astTypeSigVar = ast } }
 
 
--- 式を読む
-exprAST :: Parser ASTMeta
-exprAST =  -- dbg "exprAST" $
-   makeExprParser term ops
+-- -- 式を読む
+-- exprAST :: Parser ASTMeta
+-- exprAST =  -- dbg "exprAST" $
+--    Comb.makeExprParser term ops
 
 
 -- 型定義を読む
 typeDef :: Parser ASTMeta
-typeDef =  -- dbg "typeDef" $
+typeDef =  dbg "typeDef" $
   meta $ do
   name  <- word "type" *> var constrIdent <* symbol "="
   types <- braces (memberWithType `sepEndBy` (symbol "," <* skipSep))
@@ -252,7 +320,7 @@ typeDef =  -- dbg "typeDef" $
     where
       -- 型定義中の、構造体のメンバーとその型を読む
       memberWithType :: Parser (Text, RecList Type)
-      memberWithType =  -- dbg "memberWithType" $
+      memberWithType =  dbg "memberWithType" $
         do{ member <- identifier
           ; types  <- typeSig
           ; pure (member, types) }
@@ -261,9 +329,9 @@ typeDef =  -- dbg "typeDef" $
 
 -- パターンマッチを含む関数定義を読む
 funDef :: Parser ASTMeta
-funDef =  -- dbg "funDef" $
+funDef =  dbg "funDef" $
   meta $ do
-  nameAST   <- word "fun" *> (var identifier <|> var operator)
+  nameAST   <- word "fun" *> var identifier
   maybeType <- optional typeSig
   _         <- symbol "="
   body      <- braces (anonFun -- <|> funDef
@@ -274,19 +342,58 @@ funDef =  -- dbg "funDef" $
                  , astFunDefName = nameAST
                  , astFunParams  = paramList $ paramNum body
                  , astFunBody    = body }
+
+paramNum :: [ASTMeta] -> Int
+paramNum arms =
+  maybe 0 (length . astPattern) $ find isAnonFun $ ast <$> arms
+  where
+    isAnonFun ASTAnonFun {} = True
+    isAnonFun _             = False
+
+paramList :: Int -> [Text]
+paramList n =
+  zipWith (<>) (replicate n "x") (tShow <$> take n [1..])
+
+
+-- 演算子の定義を読む
+opDef :: Parser ASTMeta
+opDef =  dbg "opDef" $
+  meta $ do
+  nameAST@ASTMeta
+    { ast = ASTVar { astVar = opName }
+    }       <- word "fun" *> var operator
+  let
+    assocR = ((,) True)
+      <$> (symbol opName *>
+            choice [ try $ StrongerThan . OpLit <$> (symbol ">" *> operator)
+                   , try $ EqualTo . OpLit <$> (symbol "==" *> operator)
+                   , WeakerThan . OpLit <$> (symbol "<" *> operator) ])
+    assocL = ((,) False)
+      <$> (choice [ try $ StrongerThan . OpLit <$> (operator *> symbol ">")
+                  , try $ EqualTo . OpLit <$> (operator *> symbol "==")
+                  , WeakerThan . OpLit <$> (operator *> symbol "<") ]
+            <* symbol opName)
+  maybeAssc <- optional (symbol "|" *> (try assocL <|> assocR) <* symbol "|")
+  maybeType <- optional typeSig
+  _         <- symbol "="
+  body      <- braces (anonFun `sepEndBy` lineSep)
+               <|> (:[]) <$> anonFun
+  let types = fromMaybe (makeGeneralType (paramNum body)) maybeType
+  pure ASTOpDef { astType      = types
+                , astOpAssoc   = maybeAssc
+                , astOpDefName = nameAST
+                , astOpParams  = paramList $ paramNum body
+                , astOpBody    = body }
     where
-      paramNum :: [ASTMeta] -> Int
-      paramNum arms =
-        maybe 0 (length . astPattern) $ find isAnonFun $ ast <$> arms
-      isAnonFun ASTAnonFun {} = True
-      isAnonFun _             = False
-      paramList :: Int -> [Text]
-      paramList n =
-        zipWith (<>) (replicate n "x") (tShow <$> take n [1..])
+      assocStr = choice [ StrongerThan . OpLit <$> (symbol ">" *> operator)
+                        , EqualTo . OpLit <$> (symbol "==" *> operator)
+                        , WeakerThan . OpLit <$> (symbol "<" *> operator) ]
+
+
 
 -- 匿名関数を読む
 anonFun :: Parser ASTMeta
-anonFun =  -- dbg "anonFun" $
+anonFun =  dbg "anonFun" $
   meta $ do
   -- パターンマッチ式を読む
   conds <- some ptn
@@ -296,34 +403,36 @@ anonFun =  -- dbg "anonFun" $
                   , astBody    = body
                   , astGuard   = guard}
 
--- anonFuns :: Parser ASTMeta
--- anonFuns = -- dbg "anonFuns" $
---   do
---   srcPos <- getSourcePos
---   anons  <- anonFuns'
---   maybe anons
---     (\sig ->
---        ASTMeta { astSrcPos = srcPos
---                , ast = ASTTypeSig { astType       = sig
---                                   , astTypeSigVar = anons }})
---     <$> optional typeSig
---   where
---     anonFuns' = meta $ do
---       anons <- anonFun `sepEndBy` lineSep
---       pure ASTSeq { astSeq = anons }
+anonFuns :: Parser ASTMeta
+anonFuns = dbg "anonFuns" $
+  do
+  srcPos <- getSourcePos
+  anons  <- anonFuns'
+  maybe anons
+    (\sig ->
+       ASTMeta { astSrcPos = srcPos
+               , ast = ASTTypeSig { astType       = sig
+                                  , astTypeSigVar = anons }})
+    <$> optional typeSig
+  where
+    anonFuns' = meta $ do
+      anons <- anonFun `sepEndBy` lineSep
+      pure ASTAnons { astAnons = anons }
 
 
 -- 複式（改行もしくは;で区切られて連続する式）を読む
 seqAST :: Parser ASTMeta
-seqAST =  -- dbg "seqAST" $
-  meta $ do
-  asts <- toplevel `sepEndBy` lineSep
-  pure ASTSeq { astSeq = asts }
+seqAST =  dbg "seqAST" $
+  undefined
+  -- meta $ do
+  -- asts <- toplevel `sepEndBy` lineSep
+  -- pure ASTSeq { astSeq = asts }
+
 
 
 -- if式を読む
 ifAST :: Parser ASTMeta
-ifAST =  -- dbg "ifAST" $
+ifAST =  dbg "ifAST" $
   meta $ do
   condAST <- word "if" *> exprAST
   thenAST <- word "then" *> exprAST
@@ -335,7 +444,7 @@ ifAST =  -- dbg "ifAST" $
 
 -- リストのリテラルを読む
 list :: Parser ASTMeta
-list = -- dbg "list" $
+list = dbg "list" $
   meta $ do
   ls <- brackets $ (exprAST <* C.space) `sepBy` seperator
   pure ASTList { astList = ls }
@@ -346,7 +455,7 @@ list = -- dbg "list" $
 
 -- 文字列のリテラルを読む
 str :: Parser ASTMeta
-str = -- dbg "str" $
+str = dbg "str" $
   meta $ do
   beginChar <- single '"' <|> single '\''
   string    <- takeWhileP (Just ("string between" <> [beginChar])) (/= beginChar)
@@ -356,19 +465,19 @@ str = -- dbg "str" $
 
 -- 型注釈を読む
 typeSig :: Parser Types
-typeSig =  -- dbg "typeList" $
+typeSig =  dbg "typeList" $
   symbol ":" *> types
   where
     types = Elems <$> (typeTerm `sepBy` symbol "->")
     -- 型を表す項を読む。Int, a, [Double], (Int->String) など。
     typeTerm :: Parser Types
-    typeTerm =  -- dbg "typeTerm" $
+    typeTerm =  dbg "typeTerm" $
       choice [ Elem <$> (constrIdent <|> identifier)
              , listTerm
              , parens types ]
     -- リスト型を読む
     listTerm :: Parser Types
-    listTerm =  -- dbg "listTerm" $
+    listTerm =  dbg "listTerm" $
       do
         term <- brackets (constrIdent <|> identifier)
         pure $ Elems [ Elem "List", Elem term ]
