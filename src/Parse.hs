@@ -363,12 +363,12 @@ opDef =  dbg "opDef" $
     { ast = ASTVar { astVar = opName }
     }       <- word "fun" *> var operator
   let
-    assocR = ((,) True)
+    assocL = ((,) False)
       <$> (symbol opName *>
             choice [ try $ StrongerThan . OpLit <$> (symbol ">" *> operator)
                    , try $ EqualTo . OpLit <$> (symbol "==" *> operator)
                    , WeakerThan . OpLit <$> (symbol "<" *> operator) ])
-    assocL = ((,) False)
+    assocR = ((,) True)
       <$> (choice [ try $ StrongerThan . OpLit <$> (operator *> symbol ">")
                   , try $ EqualTo . OpLit <$> (operator *> symbol "==")
                   , WeakerThan . OpLit <$> (operator *> symbol "<") ]
