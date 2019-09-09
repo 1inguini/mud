@@ -40,5 +40,4 @@ fun toString : [a] -> String = {
     [x;xs] -> "[" + x.toString + xs.listToStringInternal
 }
 
-
 puts (False.toString + " and " + -1234567.toString + " and " + [1,2,3,4].toString + " and " + "This is String".toString + " is String")

@@ -134,13 +134,6 @@ skipSep = L.space spaceOrLineSep lineCmnt blockCmnt
       takeWhile1P (Just "line seperator") (\c -> isSpace c || c `elem` sepChars)
 
 
--- programParser :: FilePath -> Parser ASTMeta
--- programParser filepath = do
---   updateParserState $ \st@State { statePosState = pos } ->
---     st { statePosState = pos { pstateSourcePos = initialPos filepath} }
---   toplevels
-
-
 -- プログラムのトップレベルを読む
 toplevels :: Parser ASTMeta
 toplevels = -- dbg "toplevels" $
@@ -188,8 +181,8 @@ ptn = -- dbg "ptn" $
 ops :: [[Operator Parser ASTMeta]]
 ops = [ [InfixL apply]
       , Prefix . genUnary4OpTable <$> ["-"]
-      , InfixR . genBinOp4OpTable <$> ["++", "**"]
       , [InfixL (genBinOp4OpTable "." <* notFollowedBy integer)]
+      -- , InfixR . genBinOp4OpTable <$> ["++", "**"]
       , InfixL . genBinOp4OpTable <$> ["*", "/"]
       , InfixL . genBinOp4OpTable <$> ["+", "-"]
       , InfixL . genBinOp4OpTable <$> [ "<="
@@ -225,9 +218,7 @@ genBinOp4OpTable txt = do
 -- 関数適用を読む
 apply :: Parser (ASTMeta -> ASTMeta -> ASTMeta)
 apply = do
-  meta   <- getSourcePos
-  -- caller <- -- anonFun <|>
-  --   var constrIdent <|> var identifier
+  meta <- getSourcePos
   pure $ \caller arg ->
            ASTMeta { astSrcPos = meta
                    , ast = ASTApply { astApplyFun = caller
@@ -242,15 +233,6 @@ astWithTypeSig = do
     ASTMeta { astSrcPos = meta
             , ast = ASTTypeSig { astType       = sig
                                , astTypeSigVar = ast } }
-
-
--- -- 型注釈つきの無名関数を読む
--- anonWithTypeSig :: Parser ASTMeta
--- anonWithTypeSig = -- -- -- dbg "astWithTypeSig" $
---   meta $ do
---   ast' <- anonFun
---   sig  <- typeSig
---   pure $ ASTTypeSig { astType = sig, astTypeSigVar = ast'}
 
 
 -- 式を読む
@@ -314,21 +296,21 @@ anonFun =  -- dbg "anonFun" $
                   , astBody    = body
                   , astGuard   = guard}
 
-anonFuns :: Parser ASTMeta
-anonFuns = -- dbg "anonFuns" $
-  do
-  srcPos <- getSourcePos
-  anons  <- anonFuns'
-  maybe anons
-    (\sig ->
-       ASTMeta { astSrcPos = srcPos
-               , ast = ASTTypeSig { astType       = sig
-                                  , astTypeSigVar = anons }})
-    <$> optional typeSig
-  where
-    anonFuns' = meta $ do
-      anons <- anonFun `sepEndBy` lineSep
-      pure ASTSeq { astSeq = anons }
+-- anonFuns :: Parser ASTMeta
+-- anonFuns = -- dbg "anonFuns" $
+--   do
+--   srcPos <- getSourcePos
+--   anons  <- anonFuns'
+--   maybe anons
+--     (\sig ->
+--        ASTMeta { astSrcPos = srcPos
+--                , ast = ASTTypeSig { astType       = sig
+--                                   , astTypeSigVar = anons }})
+--     <$> optional typeSig
+--   where
+--     anonFuns' = meta $ do
+--       anons <- anonFun `sepEndBy` lineSep
+--       pure ASTSeq { astSeq = anons }
 
 
 -- 複式（改行もしくは;で区切られて連続する式）を読む
@@ -349,16 +331,6 @@ ifAST =  -- dbg "ifAST" $
   pure ASTIf { astIfCond = condAST
              , astIfThen = thenAST
              , astIfElse = elseAST }
-
-
--- -- パターンマッチの左辺になる関数の適用を読む
--- applyConstr :: Parser ASTMeta
--- applyConstr = -- -- -- dbg "apply" $
---   meta $ do
---   caller <- var constrIdent
---   args   <- ptn
---   pure ASTApply { astApplyFun  = caller
---                 , astApplyArg = args }
 
 
 -- リストのリテラルを読む
