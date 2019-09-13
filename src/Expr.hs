@@ -97,13 +97,13 @@ data AST
   | ASTFunDef      { astType       :: Types
                    , astFunDefName :: NameAST
                    , astFunParams  :: [Param]
-                   , astFunBody    :: [ASTMeta] }
+                   , astFunBody    :: ASTMeta }
 
   | ASTOpDef       { astType      :: Types
                    , astOpDefName :: NameAST
                    , astOpAssoc   :: Maybe OpLaw
                    , astOpParams  :: [Param]
-                   , astOpBody    :: [ASTMeta] }
+                   , astOpBody    :: ASTMeta }
 
   | ASTApply       { astApplyFun :: ASTMeta
                    , astApplyArg :: ASTMeta }

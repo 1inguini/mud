@@ -6,6 +6,8 @@ import           Control.Arrow                  (arr, first, second, (&&&),
                                                  (***), (>>>))
 import           Control.Monad                  (join, void)
 import qualified Control.Monad.Combinators.Expr as Comb
+import           Control.Monad.State            (StateT, execStateT, get, put)
+import           Control.Monad.Trans            (lift)
 import           Data.Bool                      (bool)
 import           Data.Char
 import           Data.List                      (find, findIndex, groupBy,
@@ -28,6 +30,7 @@ import           RecList
 
 type Parser = Parsec Void Text
 type OpTable = [[Comb.Operator Parser ASTMeta]]
+type OpMaps = [Map Text OpAssociativity]
 
 spaceConsumer, lineCmnt, blockCmnt  :: Parser ()
 
@@ -154,40 +157,35 @@ skipSep = L.space spaceOrLineSep lineCmnt blockCmnt
 -- プログラムのトップレベルを読む
 toplevels :: Parser ASTMeta
 toplevels = dbg "toplevels" $
-  meta $ do
-  skipSep
-  tops <- toplevel -- (opMaps2OpTables defOpMaps)
-    `sepEndBy` lineSep
-  pure ASTSeq { astSeq = tops }
+  seqAST defOpMaps
 
-
--- toplevel :: OpTable -> Parser ASTMeta
-toplevel = dbg "toplevel" $
+toplevel :: OpMaps -> Parser ASTMeta
+toplevel opMaps = dbg "toplevel" $
   -- exprAST
-  choice [ opDef
-         -- , funDef
+  choice [ try $ opDef opMaps
+         , funDef opMaps
          , typeDef
-         , exprAST ]
+         , exprAST opMaps ]
 
 
 -- 項を読む。項は演算子の引数になるもの。
--- term :: OpTable -> Parser ASTMeta
-term = dbg "term" $
-  choice [ try anonFun
-         , try ifAST
+term :: OpMaps -> Parser ASTMeta
+term opMaps = dbg "term" $
+  choice [ try $ anonFun opMaps
+         , try $ ifAST opMaps
          , try ptn
-         , braces seqAST
+         , braces $ seqAST opMaps
          , parens $ choice
            [ -- try astWithTypeSig
            -- ,
-           try anonFuns
-           , exprAST ] ]
+           try $ anonFuns opMaps
+           , exprAST opMaps ] ]
 
 
 -- パターンマッチの左辺値になるもの
 ptn :: Parser ASTMeta
 ptn = dbg "ptn" $
-  choice [ list
+  choice [ listPtn
          , str
          , meta $ ASTDouble <$> try double
          , meta $ ASTInt <$> integer
@@ -200,7 +198,7 @@ genOpTable :: Parser OpTable
 genOpTable = undefined
 
 -- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
-defOpMaps :: [Map Text OpAssociativity]
+defOpMaps :: OpMaps
 defOpMaps = fromList <$>
   [ [("-", Prefix)
     -- ("°", Postfix)
@@ -209,7 +207,7 @@ defOpMaps = fromList <$>
   -- "."演算子はここ
   , flip (,) InfixL <$> ["*", "/"]
   , flip (,) InfixL <$> ["+", "-"]
-  , flip (,) InfixL <$> [ "<=", "=>", "<", ">" ]
+  , flip (,) InfixL <$> [ "<=", ">=", "<", ">" ]
   , flip (,) InfixR <$> ["=="]
   , flip (,) InfixL <$> ["&&"]
   , flip (,) InfixL <$> ["||"]
@@ -218,7 +216,7 @@ defOpMaps = fromList <$>
   ]
 
 
-opMaps2OpTables :: [Map Text OpAssociativity] -> OpTable
+opMaps2OpTables :: OpMaps -> OpTable
 opMaps2OpTables opMaps = (tup2ComBOp <$>) <$> (toDescList <$> opMaps)
   where
     tup2ComBOp :: (Text, OpAssociativity) -> Comb.Operator Parser ASTMeta
@@ -227,9 +225,9 @@ opMaps2OpTables opMaps = (tup2ComBOp <$>) <$> (toDescList <$> opMaps)
     tup2ComBOp (opTxt, Prefix) = Comb.Prefix (genPrefix4OpTable opTxt)
 
 
-exprAST :: Parser ASTMeta
-exprAST =
-  Comb.makeExprParser (term) newOpMaps
+exprAST :: OpMaps -> Parser ASTMeta
+exprAST opMaps =
+  Comb.makeExprParser (term opMaps) newOpMaps
   where
     insertNonOp :: OpTable -> OpTable
     insertNonOp (prefix:infixs) =
@@ -237,7 +235,7 @@ exprAST =
     insertNonOp [] = [Comb.InfixL apply]:opsTail
     opsTail = [ [Comb.Postfix astWithTypeSig]
               , [Comb.InfixR $ genBinOp4OpTable "="] ]
-    newOpMaps = insertNonOp $ opMaps2OpTables defOpMaps
+    newOpMaps = insertNonOp $ opMaps2OpTables opMaps
 
 
 -- exprAST :: OpTable -> Parser ASTMeta
@@ -344,27 +342,30 @@ typeDef =  dbg "typeDef" $
 
 
 -- パターンマッチを含む関数定義を読む
-funDef :: Parser ASTMeta
-funDef =  dbg "funDef" $
+funDef :: OpMaps -> Parser ASTMeta
+funDef opMaps =  dbg "funDef" $
   meta $ do
   nameAST   <- word "fun" *> var identifier
   maybeType <- optional typeSig
   _         <- symbol "="
-  body      <- braces (anonFun -- <|> funDef
-                        `sepEndBy` lineSep)
-               <|> (:[]) <$> anonFun
+  body      <- braces (seqAST opMaps) <|> anonFun opMaps
   let types = fromMaybe (makeGeneralType (paramNum body)) maybeType
   pure ASTFunDef { astType       = types
                  , astFunDefName = nameAST
                  , astFunParams  = paramList $ paramNum body
                  , astFunBody    = body }
 
-paramNum :: [ASTMeta] -> Int
-paramNum arms =
-  maybe 0 (length . astPattern) $ find isAnonFun $ ast <$> arms
+paramNum :: ASTMeta -> Int
+paramNum seq
+  | isSeq     (ast seq) = maybe 0 (length . astPattern)
+                          $ find isAnonFun $ ast <$> astSeq (ast seq)
+  | isAnonFun (ast seq) = length $ astPattern (ast seq)
+  | otherwise           = 0
   where
     isAnonFun ASTAnonFun {} = True
     isAnonFun _             = False
+    isSeq ASTSeq {} = True
+    isSeq _         = False
 
 paramList :: Int -> [Text]
 paramList n =
@@ -372,8 +373,8 @@ paramList n =
 
 
 -- 演算子の定義を読む
-opDef :: Parser ASTMeta
-opDef =  dbg "opDef" $
+opDef :: OpMaps -> Parser ASTMeta
+opDef opMaps = dbg "opDef" $
   meta $ do
   nameAST@ASTMeta
     { ast = ASTVar { astVar = opName }
@@ -381,8 +382,7 @@ opDef =  dbg "opDef" $
   maybeAssc <- optional $ parens $ try (assocL opName) <|> assocR opName
   maybeType <- optional typeSig
   _         <- symbol "="
-  body      <- braces (anonFun `sepEndBy` lineSep)
-               <|> (:[]) <$> anonFun
+  body      <- braces (seqAST opMaps) <|> anonFun opMaps
   let types = fromMaybe (makeGeneralType (paramNum body)) maybeType
   pure ASTOpDef { astType      = types
                 , astOpAssoc   = maybeAssc
@@ -391,21 +391,20 @@ opDef =  dbg "opDef" $
                 , astOpBody    = body }
 
 
-
 -- 匿名関数を読む
-anonFun :: Parser ASTMeta
-anonFun =  dbg "anonFun" $
+anonFun :: OpMaps -> Parser ASTMeta
+anonFun opMaps =  dbg "anonFun" $
   meta $ do
   -- パターンマッチ式を読む
   conds <- some ptn
-  guard <- optional (symbol "|" *> exprAST <* symbol "|")
-  body  <- symbol "->" *> exprAST
+  guard <- optional (symbol "|" *> exprAST opMaps <* symbol "|")
+  body  <- symbol "->" *> exprAST opMaps
   pure ASTAnonFun { astPattern = conds
                   , astBody    = body
                   , astGuard   = guard}
 
-anonFuns :: Parser ASTMeta
-anonFuns = dbg "anonFuns" $
+anonFuns :: OpMaps -> Parser ASTMeta
+anonFuns opMaps = dbg "anonFuns" $
   do
   srcPos <- getSourcePos
   anons  <- anonFuns'
@@ -417,37 +416,35 @@ anonFuns = dbg "anonFuns" $
     <$> optional typeSig
   where
     anonFuns' = meta $ do
-      anons <- anonFun `sepEndBy` lineSep
+      anons <- anonFun opMaps `sepEndBy` lineSep
       pure ASTAnons { astAnons = anons }
 
 
 -- 複式（改行もしくは;で区切られて連続する式）を読む
-seqAST :: Parser ASTMeta
-seqAST =  dbg "seqAST" $
-  undefined
-  -- meta $ do
-  -- asts <- toplevel `sepEndBy` lineSep
-  -- pure ASTSeq { astSeq = asts }
+seqAST :: OpMaps -> Parser ASTMeta
+seqAST opMaps =  dbg "seqAST" $
+  meta $ do
+  opMaps' <- lookAhead $ execStateT genOpMaps opMaps
+  asts    <- toplevel opMaps' `sepEndBy` lineSep
+  pure ASTSeq { astSeq = asts }
 
-genOpMaps opMaps = do
-  skipNonF
-  newOpMaps <- ((\(opName, mayOpLaw) ->
-                   maybe opMaps (modifyOpMaps opMaps) mayOpLaw)
-                <$> opAssocDef)
-               <|> opMaps <$ single 'f'
-  try (genOpMaps newOpMaps) <|> newOpMaps <$ skipNonF
+genOpMaps :: StateT OpMaps Parser ()
+genOpMaps =
+  mapM_ modifyOpMaps =<< lift (opAssocDef `sepEndBy` skipNonF)
 
-modifyOpMaps opMaps OpLaw { operator = OpLit opName
-                          , associativity = assoc
-                          , precedence    = preced } =
+modifyOpMaps :: OpLaw -> StateT OpMaps Parser ()
+modifyOpMaps OpLaw { operator      = OpLit opName
+                   , associativity = assoc
+                   , precedence    = preced } = do
+  opMaps <- get
   case preced of
-    StrongerThan (OpLit op) ->
+    StrongerThan (OpLit op) -> put $
       maybe opMaps (\index -> insertAt (index - 1) (singleton opName assoc) opMaps)
       $ findIndex (member op) opMaps
-    WeakerThan (OpLit op) ->
+    WeakerThan (OpLit op) -> put $
       maybe opMaps (\index -> insertAt (index + 1) (singleton opName assoc) opMaps)
       $ findIndex (member op) opMaps
-    EqualTo (OpLit op) -> do
+    EqualTo (OpLit op) -> put $ do
       opMap <- opMaps
       pure $ bool opMap (insert opName assoc opMap) $ member op opMap
 
@@ -459,12 +456,12 @@ opLaw2tup OpLaw { operator      = OpLit op
                 , associativity = assoc } = (op, assoc)
 
 -- 演算子の定義を読む
-opAssocDef :: Parser (Text, Maybe OpLaw)
+opAssocDef :: Parser OpLaw
 opAssocDef =  dbg "opAssocDef" $
   do
     opName    <- word "fun" *> opIdent
-    maybeAssc <- optional $ parens $ try (assocL opName) <|> assocR opName
-    pure (opName, maybeAssc)
+    maybeAssc <- parens $ try (assocL opName) <|> assocR opName
+    pure maybeAssc
 
 skipNonF :: Parser ()
 skipNonF = L.space (() <$ satisfy ('f' /=)) lineCmnt blockCmnt
@@ -490,22 +487,33 @@ assocR opName = do
 
 
 -- if式を読む
-ifAST :: Parser ASTMeta
-ifAST =  dbg "ifAST" $
+ifAST :: OpMaps -> Parser ASTMeta
+ifAST opMaps = dbg "ifAST" $
   meta $ do
-  condAST <- word "if" *> exprAST
-  thenAST <- word "then" *> exprAST
-  elseAST <- word "else" *> exprAST
+  condAST <- word "if" *> exprAST opMaps
+  thenAST <- word "then" *> exprAST opMaps
+  elseAST <- word "else" *> exprAST opMaps
   pure ASTIf { astIfCond = condAST
              , astIfThen = thenAST
              , astIfElse = elseAST }
 
 
 -- リストのリテラルを読む
-list :: Parser ASTMeta
-list = dbg "list" $
+list :: OpMaps -> Parser ASTMeta
+list opMaps = dbg "list" $
   meta $ do
-  ls <- brackets $ (exprAST <* C.space) `sepBy` seperator
+  ls <- brackets $ (exprAST opMaps <* C.space) `sepBy` seperator
+  pure ASTList { astList = ls }
+  where
+    seperator = L.lexeme (L.space C.space1 lineCmnt blockCmnt)
+                $ oneOf (",;" :: [Char])
+
+
+-- リストのパターンマッチを読む
+listPtn :: Parser ASTMeta
+listPtn = dbg "list" $
+  meta $ do
+  ls <- brackets $ (ptn <* C.space) `sepBy` seperator
   pure ASTList { astList = ls }
   where
     seperator = L.lexeme (L.space C.space1 lineCmnt blockCmnt)
