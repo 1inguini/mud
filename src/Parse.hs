@@ -68,6 +68,7 @@ isOpChar c = isSymbol c
 
 isIdentChar c = isPrint c
                 && (not . isOpChar) c
+                && (not . isSpace) c
                 || '_' == c
 
 -- 予約語のリスト
@@ -115,7 +116,7 @@ word txt = between skipSep skipSep $ lexeme $
 
 
 var :: Parser Text -> Parser ASTMeta
-var p = dbg "var" $
+var p = -- dbg "var" $
   meta $ do
   txt <- p
   pure $ ASTVar { astVar = txt }
@@ -156,11 +157,11 @@ skipSep = L.space spaceOrLineSep lineCmnt blockCmnt
 
 -- プログラムのトップレベルを読む
 toplevels :: Parser ASTMeta
-toplevels = dbg "toplevels" $
+toplevels = -- dbg "toplevels" $
   seqAST defOpMaps
 
 toplevel :: OpMaps -> Parser ASTMeta
-toplevel opMaps = dbg "toplevel" $
+toplevel opMaps = -- dbg "toplevel" $
   -- exprAST
   choice [ try $ opDef opMaps
          , funDef opMaps
@@ -170,7 +171,7 @@ toplevel opMaps = dbg "toplevel" $
 
 -- 項を読む。項は演算子の引数になるもの。
 term :: OpMaps -> Parser ASTMeta
-term opMaps = dbg "term" $
+term opMaps = -- dbg "term" $
   choice [ try $ anonFun opMaps
          , try $ ifAST opMaps
          , try ptn
@@ -184,7 +185,7 @@ term opMaps = dbg "term" $
 
 -- パターンマッチの左辺値になるもの
 ptn :: Parser ASTMeta
-ptn = dbg "ptn" $
+ptn = -- dbg "ptn" $
   choice [ listPtn
          , str
          , meta $ ASTDouble <$> try double
@@ -325,7 +326,7 @@ astWithTypeSig = do
 
 -- 型定義を読む
 typeDef :: Parser ASTMeta
-typeDef =  dbg "typeDef" $
+typeDef =  -- dbg "typeDef" $
   meta $ do
   name  <- word "type" *> var constrIdent <* symbol "="
   types <- braces (memberWithType `sepEndBy` (symbol "," <* skipSep))
@@ -334,7 +335,7 @@ typeDef =  dbg "typeDef" $
     where
       -- 型定義中の、構造体のメンバーとその型を読む
       memberWithType :: Parser (Text, RecList Type)
-      memberWithType =  dbg "memberWithType" $
+      memberWithType =  -- dbg "memberWithType" $
         do{ member <- identifier
           ; types  <- typeSig
           ; pure (member, types) }
@@ -343,7 +344,7 @@ typeDef =  dbg "typeDef" $
 
 -- パターンマッチを含む関数定義を読む
 funDef :: OpMaps -> Parser ASTMeta
-funDef opMaps =  dbg "funDef" $
+funDef opMaps =  -- dbg "funDef" $
   meta $ do
   nameAST   <- word "fun" *> var identifier
   maybeType <- optional typeSig
@@ -374,7 +375,7 @@ paramList n =
 
 -- 演算子の定義を読む
 opDef :: OpMaps -> Parser ASTMeta
-opDef opMaps = dbg "opDef" $
+opDef opMaps = -- dbg "opDef" $
   meta $ do
   nameAST@ASTMeta
     { ast = ASTVar { astVar = opName }
@@ -393,7 +394,7 @@ opDef opMaps = dbg "opDef" $
 
 -- 匿名関数を読む
 anonFun :: OpMaps -> Parser ASTMeta
-anonFun opMaps =  dbg "anonFun" $
+anonFun opMaps =  -- dbg "anonFun" $
   meta $ do
   -- パターンマッチ式を読む
   conds <- some ptn
@@ -404,7 +405,7 @@ anonFun opMaps =  dbg "anonFun" $
                   , astGuard   = guard}
 
 anonFuns :: OpMaps -> Parser ASTMeta
-anonFuns opMaps = dbg "anonFuns" $
+anonFuns opMaps = -- dbg "anonFuns" $
   do
   srcPos <- getSourcePos
   anons  <- anonFuns'
@@ -422,7 +423,7 @@ anonFuns opMaps = dbg "anonFuns" $
 
 -- 複式（改行もしくは;で区切られて連続する式）を読む
 seqAST :: OpMaps -> Parser ASTMeta
-seqAST opMaps =  dbg "seqAST" $
+seqAST opMaps =  -- dbg "seqAST" $
   meta $ do
   opMaps' <- lookAhead $ execStateT genOpMaps opMaps
   asts    <- toplevel opMaps' `sepEndBy` lineSep
@@ -460,7 +461,7 @@ opLaw2tup OpLaw { operator      = OpLit op
 
 -- 演算子の定義を読む
 opAssocDef :: Parser OpLaw
-opAssocDef =  dbg "opAssocDef" $
+opAssocDef =  -- dbg "opAssocDef" $
   do
     opName    <- word "fun" *> opIdent
     maybeAssc <- parens $ try (assocL opName) <|> assocR opName
@@ -491,7 +492,7 @@ assocR opName = do
 
 -- if式を読む
 ifAST :: OpMaps -> Parser ASTMeta
-ifAST opMaps = dbg "ifAST" $
+ifAST opMaps = -- dbg "ifAST" $
   meta $ do
   condAST <- word "if" *> exprAST opMaps
   thenAST <- word "then" *> exprAST opMaps
@@ -503,7 +504,7 @@ ifAST opMaps = dbg "ifAST" $
 
 -- リストのリテラルを読む
 list :: OpMaps -> Parser ASTMeta
-list opMaps = dbg "list" $
+list opMaps = -- dbg "list" $
   meta $ do
   ls <- brackets $ (exprAST opMaps <* C.space) `sepBy` seperator
   pure ASTList { astList = ls }
@@ -514,7 +515,7 @@ list opMaps = dbg "list" $
 
 -- リストのパターンマッチを読む
 listPtn :: Parser ASTMeta
-listPtn = dbg "list" $
+listPtn = -- dbg "list" $
   meta $ do
   ls <- brackets $ (ptn <* C.space) `sepBy` seperator
   pure ASTList { astList = ls }
@@ -525,7 +526,7 @@ listPtn = dbg "list" $
 
 -- 文字列のリテラルを読む
 str :: Parser ASTMeta
-str = dbg "str" $
+str = -- dbg "str" $
   meta $ do
   beginChar <- single '"' <|> single '\''
   string    <- takeWhileP (Just ("string between" <> [beginChar])) (/= beginChar)
@@ -535,19 +536,19 @@ str = dbg "str" $
 
 -- 型注釈を読む
 typeSig :: Parser Types
-typeSig =  dbg "typeList" $
+typeSig =  -- dbg "typeList" $
   symbol ":" *> types
   where
     types = Elems <$> (typeTerm `sepBy` symbol "->")
     -- 型を表す項を読む。Int, a, [Double], (Int->String) など。
     typeTerm :: Parser Types
-    typeTerm =  dbg "typeTerm" $
+    typeTerm =  -- dbg "typeTerm" $
       choice [ Elem <$> (constrIdent <|> identifier)
              , listTerm
              , parens types ]
     -- リスト型を読む
     listTerm :: Parser Types
-    listTerm =  dbg "listTerm" $
+    listTerm =  -- dbg "listTerm" $
       do
         term <- brackets (constrIdent <|> identifier)
         pure $ Elems [ Elem "List", Elem term ]
