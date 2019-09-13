@@ -430,7 +430,10 @@ seqAST opMaps =  dbg "seqAST" $
 
 genOpMaps :: StateT OpMaps Parser ()
 genOpMaps =
-  mapM_ modifyOpMaps =<< lift (opAssocDef `sepEndBy` skipNonF)
+  mapM_ modifyOpMaps
+  =<< catMaybes <$> lift ((Just <$> try opAssocDef
+                            <|> (Nothing <$ single 'f'))
+                           `sepEndBy` skipNonF)
 
 modifyOpMaps :: OpLaw -> StateT OpMaps Parser ()
 modifyOpMaps OpLaw { operator      = OpLit opName
