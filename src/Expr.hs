@@ -48,18 +48,24 @@ instance Show ExprMeta where
 
 type Types = RecList Type
 
-data Assoc = InfixR
-           | InfixL
-           | Prefix
-           -- | Postfix
-           deriving (Eq, Show)
+data OpAssociativity = InfixR
+                     | InfixL
+                     | Prefix
+                     -- | Postfix
+                     deriving (Eq, Show)
 
-data AssocStr = StrongerThan Op
-              | EqualTo      Op
-              | WeakerThan   Op
-              deriving (Show, Eq)
+data OpPrecedence = StrongerThan Op
+                  | EqualTo      Op
+                  | WeakerThan   Op
+                  deriving (Show, Eq)
 
 newtype Op = OpLit Text deriving (Eq, Show)
+
+data OpLaw = OpLaw
+            { operator      :: Op
+            , associativity :: OpAssociativity
+            , precedence    :: OpPrecedence
+            } deriving (Show, Eq)
 
 data AST
   = ASTComment Text
@@ -95,8 +101,7 @@ data AST
 
   | ASTOpDef       { astType      :: Types
                    , astOpDefName :: NameAST
-                   , astOpAssoc   :: Maybe ( Bool -- is Right Assoc?
-                                           , AssocStr)
+                   , astOpAssoc   :: Maybe OpLaw
                    , astOpParams  :: [Param]
                    , astOpBody    :: [ASTMeta] }
 

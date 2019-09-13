@@ -2,13 +2,18 @@
 -- 字句解析と構文解析
 module Parse where
 
-import           Control.Arrow                  ((&&&), (***), (>>>))
+import           Control.Arrow                  (arr, first, second, (&&&),
+                                                 (***), (>>>))
 import           Control.Monad                  (join, void)
 import qualified Control.Monad.Combinators.Expr as Comb
+import           Data.Bool                      (bool)
 import           Data.Char
-import           Data.List                      (find)
-import           Data.Map                       (Map, fromList, toDescList)
+import           Data.List                      (find, findIndex, groupBy,
+                                                 insertBy, nubBy, splitAt)
+import           Data.Map                       (Map, fromList, insert, member,
+                                                 singleton, toDescList)
 import           Data.Maybe
+import           Data.Ord
 import           Data.Text                      (Text, cons, pack)
 import           Data.Void
 import           Debug.Trace
@@ -49,20 +54,31 @@ integer = lexeme L.decimal
 double :: Parser Double
 double = lexeme L.float
 
--- 演算子を読む
-operator :: Parser Text
-operator = lexeme $ takeWhile1P (Just "symbol") (`elem` opChars)
-
-
 opChars, endChars, sepChars :: [Char]
-opChars = "+-*/><"
+opChars = "!#$%&*+./<=>?@\\^|-~:"
 endChars = "!?_'"
 sepChars = ";\n"
 
+isOpChar, isIdentChar :: Char -> Bool
+isOpChar c = isSymbol c
+             || c `elem` opChars
+
+isIdentChar c = isPrint c
+                && (not . isOpChar) c
+                || '_' == c
 
 -- 予約語のリスト
-reservedWords :: [Text] -- list of reserved words
+reservedWords, reservedOps :: [Text] -- list of reserved words
 reservedWords = ["fun","if","then","else","type"]
+reservedOps = [":", "="]
+
+-- 演算子を読む
+opIdent :: Parser Text
+opIdent = lexeme $ takeWhile1P (Just "symbol") isOpChar >>= check
+  where
+    check x = if x `elem` reservedOps
+      then fail $ "keyword " <> show x <> " cannot be an opIdent"
+      else pure x
 
 
 -- 識別子を読む
@@ -77,7 +93,7 @@ constrIdent = satisfy isUpper >>= identifier'
 
 identifier' :: Char -> Parser Text
 identifier' firstLetter = lexeme $ check =<< do
-  middleLetters <- takeWhileP (Just "alphaNum and _") (\c -> isAlphaNum c || c == '_')
+  middleLetters <- takeWhileP (Just "printable non symbol and _") isIdentChar
   lastLetters   <- takeWhileP (Just "endChar") (`elem` endChars)
   pure $ cons firstLetter middleLetters <> lastLetters
     where
@@ -184,7 +200,7 @@ genOpTable :: Parser OpTable
 genOpTable = undefined
 
 -- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
-defOpMaps :: [Map Text Assoc]
+defOpMaps :: [Map Text OpAssociativity]
 defOpMaps = fromList <$>
   [ [("-", Prefix)
     -- ("°", Postfix)
@@ -202,10 +218,10 @@ defOpMaps = fromList <$>
   ]
 
 
-opMaps2OpTables :: [Map Text Assoc] -> OpTable
+opMaps2OpTables :: [Map Text OpAssociativity] -> OpTable
 opMaps2OpTables opMaps = (tup2ComBOp <$>) <$> (toDescList <$> opMaps)
   where
-    tup2ComBOp :: (Text, Assoc) -> Comb.Operator Parser ASTMeta
+    tup2ComBOp :: (Text, OpAssociativity) -> Comb.Operator Parser ASTMeta
     tup2ComBOp (opTxt, InfixR) = Comb.InfixR (genBinOp4OpTable opTxt)
     tup2ComBOp (opTxt, InfixL) = Comb.InfixL (genBinOp4OpTable opTxt)
     tup2ComBOp (opTxt, Prefix) = Comb.Prefix (genPrefix4OpTable opTxt)
@@ -361,19 +377,8 @@ opDef =  dbg "opDef" $
   meta $ do
   nameAST@ASTMeta
     { ast = ASTVar { astVar = opName }
-    }       <- word "fun" *> var operator
-  let
-    assocL = ((,) False)
-      <$> (symbol opName *>
-            choice [ try $ StrongerThan . OpLit <$> (symbol ">" *> operator)
-                   , try $ EqualTo . OpLit <$> (symbol "==" *> operator)
-                   , WeakerThan . OpLit <$> (symbol "<" *> operator) ])
-    assocR = ((,) True)
-      <$> (choice [ try $ StrongerThan . OpLit <$> (operator *> symbol ">")
-                  , try $ EqualTo . OpLit <$> (operator *> symbol "==")
-                  , WeakerThan . OpLit <$> (operator *> symbol "<") ]
-            <* symbol opName)
-  maybeAssc <- optional (symbol "|" *> (try assocL <|> assocR) <* symbol "|")
+    }       <- word "fun" *> var opIdent
+  maybeAssc <- optional $ parens $ try (assocL opName) <|> assocR opName
   maybeType <- optional typeSig
   _         <- symbol "="
   body      <- braces (anonFun `sepEndBy` lineSep)
@@ -384,10 +389,6 @@ opDef =  dbg "opDef" $
                 , astOpDefName = nameAST
                 , astOpParams  = paramList $ paramNum body
                 , astOpBody    = body }
-    where
-      assocStr = choice [ StrongerThan . OpLit <$> (symbol ">" *> operator)
-                        , EqualTo . OpLit <$> (symbol "==" *> operator)
-                        , WeakerThan . OpLit <$> (symbol "<" *> operator) ]
 
 
 
@@ -428,6 +429,64 @@ seqAST =  dbg "seqAST" $
   -- asts <- toplevel `sepEndBy` lineSep
   -- pure ASTSeq { astSeq = asts }
 
+genOpMaps opMaps = do
+  skipNonF
+  newOpMaps <- ((\(opName, mayOpLaw) ->
+                   maybe opMaps (modifyOpMaps opMaps) mayOpLaw)
+                <$> opAssocDef)
+               <|> opMaps <$ single 'f'
+  try (genOpMaps newOpMaps) <|> newOpMaps <$ skipNonF
+
+modifyOpMaps opMaps OpLaw { operator = OpLit opName
+                          , associativity = assoc
+                          , precedence    = preced } =
+  case preced of
+    StrongerThan (OpLit op) ->
+      maybe opMaps (\index -> insertAt (index - 1) (singleton opName assoc) opMaps)
+      $ findIndex (member op) opMaps
+    WeakerThan (OpLit op) ->
+      maybe opMaps (\index -> insertAt (index + 1) (singleton opName assoc) opMaps)
+      $ findIndex (member op) opMaps
+    EqualTo (OpLit op) -> do
+      opMap <- opMaps
+      pure $ bool opMap (insert opName assoc opMap) $ member op opMap
+
+insertAt :: Int -> a -> [a] -> [a]
+insertAt index elem list = (\(gt, lt) -> gt <> (elem:lt))
+        $ splitAt index list
+
+opLaw2tup OpLaw { operator      = OpLit op
+                , associativity = assoc } = (op, assoc)
+
+-- 演算子の定義を読む
+opAssocDef :: Parser (Text, Maybe OpLaw)
+opAssocDef =  dbg "opAssocDef" $
+  do
+    opName    <- word "fun" *> opIdent
+    maybeAssc <- optional $ parens $ try (assocL opName) <|> assocR opName
+    pure (opName, maybeAssc)
+
+skipNonF :: Parser ()
+skipNonF = L.space (() <$ satisfy ('f' /=)) lineCmnt blockCmnt
+
+assocL, assocR :: Text -> Parser OpLaw
+assocL opName = do
+  preced <- symbol opName *>
+            choice [ try $ StrongerThan . OpLit <$> (symbol ">" *> opIdent)
+                   , try $ EqualTo . OpLit <$> (symbol "==" *> opIdent)
+                   , WeakerThan . OpLit <$> (symbol "<" *> opIdent) ]
+  pure OpLaw { operator      = OpLit opName
+             , associativity = InfixL
+             , precedence    = preced }
+
+assocR opName = do
+  preced <- choice [ try $ StrongerThan . OpLit <$> (opIdent *> symbol ">")
+                   , try $ EqualTo . OpLit <$> (opIdent *> symbol "==")
+                   , WeakerThan . OpLit <$> (opIdent *> symbol "<") ]
+            <* symbol opName
+  pure OpLaw { operator      = OpLit opName
+             , associativity = InfixR
+             , precedence    = preced }
 
 
 -- if式を読む
