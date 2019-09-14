@@ -23,6 +23,8 @@ type Env = GeneralEnv ExprMeta
 type GeneralEnv a = -- IORef
   Map Text [(RecList Type, a)]
 
+type OpMaps = [Map Text OpAssociativity]
+
 -- data CodeMeta = CodeMeta { codeFileName :: FilePath
 --                          , codePos      :: (Int, Int) }
 --               deriving (Eq, Show)
@@ -85,9 +87,8 @@ data AST
   | ASTUnary       { astOp  :: Op
                    , astArg :: ASTMeta }
 
-  | ASTSeq         { -- astOpTable :: [Map Op Assoc]
-                   -- ,
-                     astSeq     :: [ASTMeta] }
+  | ASTSeq         { astOpMaps :: OpMaps
+                   , astSeq    :: [ASTMeta] }
 
   | ASTAnons       { astAnons :: [ASTMeta] }
 
