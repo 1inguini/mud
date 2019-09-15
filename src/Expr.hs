@@ -23,6 +23,8 @@ type Env = GeneralEnv ExprMeta
 type GeneralEnv a = -- IORef
   Map Text [(RecList Type, a)]
 
+type OpMaps = [Map Text OpAssociativity]
+
 -- data CodeMeta = CodeMeta { codeFileName :: FilePath
 --                          , codePos      :: (Int, Int) }
 --               deriving (Eq, Show)
@@ -48,6 +50,26 @@ instance Show ExprMeta where
 
 type Types = RecList Type
 
+data OpAssociativity = InfixR
+                     | InfixL
+                     | Prefix
+                     -- | Postfix
+                     deriving (Eq, Show)
+
+data OpPrecedence = StrongerThan Op
+                  | EqualTo      Op
+                  | WeakerThan   Op
+                  deriving (Show, Eq)
+
+data Op = OpLit Text
+        | Dot deriving (Eq, Show)
+
+data OpLaw = OpLaw
+            { operator      :: Op
+            , associativity :: OpAssociativity
+            , precedence    :: OpPrecedence
+            } deriving (Show, Eq)
+
 data AST
   = ASTComment Text
   | ASTInt    { astInt  :: Integer }
@@ -66,7 +88,9 @@ data AST
   | ASTUnary       { astOp  :: Op
                    , astArg :: ASTMeta }
 
-  | ASTSeq         { astSeq :: [ASTMeta] }
+  | ASTSeq         { astSeq    :: [ASTMeta] }
+
+  | ASTAnons       { astAnons :: [ASTMeta] }
 
   | ASTAssign      { astAssignName :: NameAST
                    , astAssignVar  :: ASTMeta }
@@ -74,7 +98,13 @@ data AST
   | ASTFunDef      { astType       :: Types
                    , astFunDefName :: NameAST
                    , astFunParams  :: [Param]
-                   , astFunBody    :: [ASTMeta] }
+                   , astFunBody    :: ASTMeta }
+
+  | ASTOpDef       { astType      :: Types
+                   , astOpDefName :: NameAST
+                   , astOpAssoc   :: Maybe OpLaw
+                   , astOpParams  :: [Param]
+                   , astOpBody    :: ASTMeta }
 
   | ASTApply       { astApplyFun :: ASTMeta
                    , astApplyArg :: ASTMeta }
@@ -144,9 +174,6 @@ data Expr
   -- | ExprCall        { exprType        :: Types
   --                   , exprCallFunName :: Name }
   deriving (Eq, Show)
-
-newtype Op = OpLit Text
-           deriving (Eq, Show)
 
 -- instance Eq AST where
 --   (ASTIntLit i1) == (ASTIntLit i2) = i1 == i2
