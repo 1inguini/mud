@@ -249,7 +249,7 @@ ops = [ Comb.Prefix . genPrefix4OpTable <$> ["-"]
       -- , [Comb.InfixL apply]
       , [Comb.InfixL dot]
       , [Comb.InfixL defLAssocOp]
-      -- , [Comb.Postfix astWithTypeSig]
+      , [Comb.Postfix astWithTypeSig]
       -- , [Comb.InfixR $ genBinOp4OpTable "="]
       ]
 
@@ -262,7 +262,7 @@ dot = do
                    , ast       = astBinOp arg0 arg1 }
 
 defLAssocOp :: Parser (ASTMeta -> ASTMeta -> ASTMeta)
-defLAssocOp = do
+defLAssocOp = try $ do
   meta     <- getSourcePos
   astBinOp <- ASTBinOp . OpLit <$> isolated opIdent
   pure $ \arg0 arg1 ->
