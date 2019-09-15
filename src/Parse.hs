@@ -48,11 +48,12 @@ singleSpace spc lnCmnt blkCmnt = () <$ choice
 
 betweens p = between p p
 
-lexeme, isolated, lexemeSep, isolatedSep :: Parser a -> Parser a
+lexeme, isolated, lexemeSep, isolatedSep, isolatedNewline :: Parser a -> Parser a
 lexeme      = betweens spaceConsumer
 isolated    = betweens spaceConsumer1
 lexemeSep   = betweens skipSep
 isolatedSep = betweens lineSep
+isolatedNewline = betweens C.space1
 
 
 -- 文の区切り文字を読む
@@ -221,7 +222,7 @@ ptn = dbg "ptn" $
          -- , meta $ ASTDouble <$> try double
          -- , meta $ ASTInt <$> integer
          -- ,
-           var identifier
+  var identifier
          -- , var constrIdent
          -- , try $ parens ptn
          ]
@@ -245,15 +246,29 @@ ptn = dbg "ptn" $
 --   ]
 
 -- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
-ops = [ Comb.Prefix . genPrefix4OpTable <$> ["-"]
-      -- , [Comb.InfixL apply]
-      , [Comb.InfixL dot]
-      , [Comb.InfixL defLAssocOp]
-      , [Comb.Postfix astWithTypeSig]
-      -- , [Comb.InfixR $ genBinOp4OpTable "="]
-      ]
+weakerThanApply =
+  [--  Comb.Prefix . genPrefix4OpTable <$> ["-"]
+  -- , [Comb.InfixL dot]
+  -- , [Comb.InfixL apply]
+  -- ,
+    [Comb.InfixL defLAssocOp]
+  , [Comb.Postfix astWithTypeSig]
+  , [Comb.InfixR assign]
+  ]
 
-dot = do
+strongerThanApply = [ Comb.Prefix . genPrefix4OpTable <$> ["-"]
+                    , [Comb.InfixL dot]
+                    ]
+
+genPrefix4OpTable :: Text -> Parser (ASTMeta -> ASTMeta)
+genPrefix4OpTable txt = try $ do
+  meta     <- getSourcePos
+  astUnary <- try $ ASTUnary . OpLit <$> chunk txt <* notFollowedBy opIdent
+  pure $ \astMeta ->
+           ASTMeta { astSrcPos = meta
+                   , ast       = astUnary astMeta }
+
+dot = try $ do
   meta     <- getSourcePos
   astBinOp <- ASTBinOp Dot <$ chunk "."
               <* notFollowedBy (() <$ opIdent <|> () <$ integer)
@@ -261,47 +276,63 @@ dot = do
            ASTMeta { astSrcPos = meta
                    , ast       = astBinOp arg0 arg1 }
 
+-- -- 関数適用を読む
+-- apply :: Parser (ASTMeta -> ASTMeta -> ASTMeta)
+-- apply = try $ do
+--   meta <- getSourcePos
+--   _    <- spaceConsumer1
+--   pure $ \caller arg ->
+--            ASTMeta { astSrcPos = meta
+--                    , ast = ASTApply { astApplyFun = caller
+--                                     , astApplyArg = arg } }
+
 defLAssocOp :: Parser (ASTMeta -> ASTMeta -> ASTMeta)
 defLAssocOp = try $ do
   meta     <- getSourcePos
-  astBinOp <- ASTBinOp . OpLit <$> isolated opIdent
+  astBinOp <- ASTBinOp . OpLit <$> isolatedNewline opIdent
   pure $ \arg0 arg1 ->
            ASTMeta { astSrcPos = meta
                    , ast       = astBinOp arg0 arg1 }
 
-genBinOp4OpTable :: Text -> Parser (ASTMeta -> ASTMeta -> ASTMeta)
-genBinOp4OpTable txt = do
+assign :: Parser (ASTMeta -> ASTMeta -> ASTMeta)
+assign = try $ do
   meta     <- getSourcePos
-  astBinOp <- ASTBinOp . OpLit <$> (chunk txt <* notFollowedBy opIdent)
-              <* skipSep
+  astBinOp <- ASTBinOp . OpLit <$> symbol "="
   pure $ \arg0 arg1 ->
            ASTMeta { astSrcPos = meta
                    , ast       = astBinOp arg0 arg1 }
 
-genPrefix4OpTable :: Text -> Parser (ASTMeta -> ASTMeta)
-genPrefix4OpTable txt = do
-  meta     <- getSourcePos
-  astUnary <- try $ ASTUnary . OpLit <$> chunk txt <* notFollowedBy opIdent
-  pure $ \astMeta ->
-           ASTMeta { astSrcPos = meta
-                   , ast       = astUnary astMeta }
+-- genBinOp4OpTable :: Text -> Parser (ASTMeta -> ASTMeta -> ASTMeta)
+-- genBinOp4OpTable txt = try $ do
+--   meta     <- getSourcePos
+--   astBinOp <- ASTBinOp . OpLit <$> (chunk txt <* notFollowedBy opIdent)
+--               <* skipSep
+--   pure $ \arg0 arg1 ->
+--            ASTMeta { astSrcPos = meta
+--                    , ast       = astBinOp arg0 arg1 }
 
 
 -- 関数適用を読む
-apply :: Parser (ASTMeta -> ASTMeta -> ASTMeta)
-apply = do
-  meta <- getSourcePos
-  _    <- spaceConsumer1
-  pure $ \caller arg ->
-           ASTMeta { astSrcPos = meta
-                   , ast = ASTApply { astApplyFun = caller
-                                    , astApplyArg = arg } }
+apply :: Parser ASTMeta -> Parser ASTMeta
+apply arg = dbg "apply" $
+  arg >>= (\a -> option a $ try $ apply' a)
+  where
+    apply' :: ASTMeta -> Parser ASTMeta
+    apply' caller = do
+      _    <- spaceConsumer1
+      meta <- getSourcePos
+      arg  <- arg
+      let result = ASTMeta
+                   { astSrcPos = meta
+                   , ast       = ASTApply
+                                 { astApplyFun = caller
+                                 , astApplyArg = arg } }
+      option result $ apply' result
 
 
 -- 型注釈つきの式を読む
 astWithTypeSig :: Parser (ASTMeta -> ASTMeta)
-astWithTypeSig = do
-  spaceConsumer
+astWithTypeSig = try $ do
   meta <- getSourcePos
   sig  <- typeSig
   pure $ \ast ->
@@ -313,7 +344,12 @@ astWithTypeSig = do
 -- 式を読む
 exprAST :: Parser ASTMeta
 exprAST =  dbg "exprAST" $
-   Comb.makeExprParser term ops
+  -- Comb.makeExprParser term ops
+  expr -- <|> term
+  where
+    args = dbg "args" $ Comb.makeExprParser term strongerThanApply
+    apply' = apply args
+    expr = dbg "expr" $ Comb.makeExprParser apply' weakerThanApply
 
 
 -- 型定義を読む
