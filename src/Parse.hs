@@ -87,6 +87,7 @@ isOpChar, isIdentChar :: Char -> Bool
 isOpChar = isSymbol &||& (`elem` opChars)
 isIdentChar =
   ('_' ==)
+  &||& isDigit
   &||& (isLetter
   &&&& (not . (isSpace
                &&&& isOpChar
@@ -100,7 +101,7 @@ isIdentChar =
 -- 予約語のリスト
 reservedWords, reservedOps, reserveds :: [Text] -- list of reserved words
 reservedWords = ["fun","if","then","else","type"]
-reservedOps = [":", "="]
+reservedOps = [":", "=", "->"]
 reserveds = reservedWords <> reservedOps
 
 
@@ -184,47 +185,44 @@ toplevels = dbg "toplevels" $
 seqAST :: Parser ASTMeta
 seqAST =  dbg "seqAST" $
   meta $ do
-  asts <- lexemeSep $ many $ toplevel <* lineSep
+  asts <- lexemeSep $ some $ toplevel <* lineSep
   pure ASTSeq { astSeq = asts }
 
 
 toplevel :: Parser ASTMeta
 toplevel = dbg "toplevel" $
-  choice [ funDef
-         , typeDef
+  choice [ typeDef
+         , funDef
          , exprAST ]
 
 
 -- 項を読む。項は演算子の引数になるもの。
 term :: Parser ASTMeta
 term = dbg "term" $
-       choice [
-  -- try anonFun
-  -- , try ifAST
-  -- ,
-  ptn
-    -- , braces seqAST
-  , parens $ choice
-    [
-      -- try astWithTypeSig
-      -- , try anonFuns
-      -- ,
-      exprAST
-    ]
-  ]
+       choice [ try anonFun
+              , try ptn
+              , try ifAST
+              , braces seqAST
+              , parens $ choice
+                [
+                  -- try astWithTypeSig
+                  -- , try anonFuns
+                  -- ,
+                  exprAST
+                ]
+              ]
 
 
 -- パターンマッチの左辺値になるもの
 ptn :: Parser ASTMeta
 ptn = dbg "ptn" $
-  choice [ -- list
-         -- , str
-         -- , meta $ ASTDouble <$> try double
-         -- , meta $ ASTInt <$> integer
-         -- ,
-  var identifier
-         -- , var constrIdent
-         -- , try $ parens ptn
+  choice [ list
+         , str
+         , meta $ ASTDouble <$> try double
+         , meta $ ASTInt <$> integer
+         , var identifier
+         , var constrIdent
+         , try $ parens ptn
          ]
 
 -- -- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
@@ -256,9 +254,10 @@ weakerThanApply =
   , [Comb.InfixR assign]
   ]
 
-strongerThanApply = [ Comb.Prefix . genPrefix4OpTable <$> ["-"]
-                    , [Comb.InfixL dot]
-                    ]
+strongerThanApply =
+  [ Comb.Prefix . genPrefix4OpTable <$> ["-"]
+  , [Comb.InfixL dot]
+  ]
 
 genPrefix4OpTable :: Text -> Parser (ASTMeta -> ASTMeta)
 genPrefix4OpTable txt = try $ do
@@ -315,19 +314,21 @@ assign = try $ do
 -- 関数適用を読む
 apply :: Parser ASTMeta -> Parser ASTMeta
 apply arg = dbg "apply" $
-  arg >>= (\a -> option a $ try $ apply' a)
+  try $ arg >>= apply'
   where
     apply' :: ASTMeta -> Parser ASTMeta
-    apply' caller = do
-      _    <- spaceConsumer1
-      meta <- getSourcePos
-      arg  <- arg
-      let result = ASTMeta
-                   { astSrcPos = meta
-                   , ast       = ASTApply
-                                 { astApplyFun = caller
-                                 , astApplyArg = arg } }
-      option result $ apply' result
+    apply' caller = dbg "apply'" $
+      option caller
+      (try $ do
+          _    <- spaceConsumer1
+          meta <- getSourcePos
+          arg  <- arg
+          apply' ASTMeta
+            { astSrcPos = meta
+            , ast       = ASTApply
+                          { astApplyFun = caller
+                          , astApplyArg = arg } })
+
 
 
 -- 型注釈つきの式を読む
@@ -345,11 +346,10 @@ astWithTypeSig = try $ do
 exprAST :: Parser ASTMeta
 exprAST =  dbg "exprAST" $
   -- Comb.makeExprParser term ops
-  expr -- <|> term
+  Comb.makeExprParser (apply args) weakerThanApply
   where
-    args = dbg "args" $ Comb.makeExprParser term strongerThanApply
-    apply' = apply args
-    expr = dbg "expr" $ Comb.makeExprParser apply' weakerThanApply
+    args = dbg "args" $
+           Comb.makeExprParser term strongerThanApply
 
 
 -- 型定義を読む
@@ -377,7 +377,7 @@ funDef =  dbg "funDef" $
   nameAST   <- word "fun" *> (var identifier <|> var (opIdent <* spaceConsumer))
   maybeType <- optional $ try typeSig
   _         <- symbol "="
-  body      <- braces seqAST <|> anonFun
+  body      <- braces seqAST <|> exprAST
   let types = fromMaybe (makeGeneralType (paramNum body)) maybeType
   pure ASTFunDef { astType       = types
                  , astFunDefName = nameAST
@@ -471,7 +471,7 @@ str = dbg "str" $
   meta $ do
   beginChar <- single '"' <|> single '\''
   string    <- takeWhileP (Just ("string between" <> [beginChar])) (/= beginChar)
-  _         <- single beginChar <* spaceConsumer
+  _         <- single beginChar
   pure ASTStr { astStr = string }
 
 

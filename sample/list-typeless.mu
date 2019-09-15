@@ -32,7 +32,7 @@ fun select : [a] -> (a -> Bool) -> [a] = {
 fun qsort : [a] -> [a] = {
     []    -> []
     [h,t] -> t.select (x -> x < h).qsort +
-      ([h]+t).select (x -> x == h) + 
+      ([h] + t).select (x -> x == h) + 
       t.select (x -> x > h).qsort
 }
 
