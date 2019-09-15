@@ -32,7 +32,7 @@ fun select : [a] -> (a -> Bool) -> [a] = {
 fun qsort : [a] -> [a] = {
     []    -> []
     [e;es] -> es.select (x -> x < e : a -> Bool).qsort +
-      ([e]+es).select (x -> x == e : a -> Bool) + 
+      ([e] + es).select (x -> x == e : a -> Bool) + 
       es.select (x -> x > e : a -> Bool).qsort
 }
 
