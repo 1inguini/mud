@@ -15,7 +15,7 @@ fun find_devisor : Int -> Int -> Int = n test_devisor -> {
       then n
       else if devides? test_devisor n
         then test_devisor
-        else find_devisor n (test_devisor+1)
+        else find_devisor n (test_devisor + 1)
 }
 
 fun smallest_devisor : Int -> Int = n -> {
