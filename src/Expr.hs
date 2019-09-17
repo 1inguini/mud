@@ -51,9 +51,8 @@ instance Show ExprMeta where
 type Types = RecList Type
 
 data OpAssociativity = InfixR
-                     | InfixL
                      | Prefix
-                     -- | Postfix
+                     | Postfix
                      deriving (Eq, Show)
 
 data OpPrecedence = StrongerThan Op
@@ -81,11 +80,14 @@ data AST
   | ASTVar    { astVar  :: Name }
   -- | ASTType   { astType :: Types }
 
-  | ASTBinOp       { astOp   :: Op
-                   , astArg0 :: ASTMeta
-                   , astArg1 :: ASTMeta }
+  -- | ASTBinOp       { astOp   :: Op
+  --                  , astArg0 :: ASTMeta
+  --                  , astArg1 :: ASTMeta }
 
-  | ASTUnary       { astOp  :: Op
+  | ASTPrefix      { astOp  :: Op
+                   , astArg :: ASTMeta }
+
+  | ASTPostfix     { astOp  :: Op
                    , astArg :: ASTMeta }
 
   | ASTSeq         { astSeq    :: [ASTMeta] }
