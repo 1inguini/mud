@@ -87,12 +87,10 @@ data AST
   | ASTPrefix      { astOp  :: Op
                    , astArg :: ASTMeta }
 
-  | ASTPostfix     { astOp  :: Op
-                   , astArg :: ASTMeta }
+  | ASTPostfix     { astArg :: ASTMeta
+                   , astOp  :: Op }
 
   | ASTSeq         { astSeq    :: [ASTMeta] }
-
-  | ASTAnons       { astAnons :: [ASTMeta] }
 
   | ASTAssign      { astAssignName :: NameAST
                    , astAssignVar  :: ASTMeta }
@@ -112,8 +110,8 @@ data AST
                    , astApplyArg :: ASTMeta }
 
   | ASTAnonFun     { astPattern :: [ASTMeta]
-                   , astBody    :: ASTMeta -- expr to exec when matched
-                   , astGuard   :: Maybe ASTMeta }
+                   , astGuard   :: Maybe ASTMeta
+                   , astBody    :: ASTMeta }
 
   | ASTIf          { astIfCond :: ASTMeta
                    , astIfThen :: ASTMeta

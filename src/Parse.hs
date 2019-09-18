@@ -5,6 +5,7 @@ module Parse where
 import           Control.Arrow                  (arr, (&&&), (***), (>>>))
 import           Control.Monad                  (join, void)
 import qualified Control.Monad.Combinators.Expr as Comb
+import           Data.Bool
 import           Data.Char
 import           Data.List                      (find)
 import           Data.Map                       ()
@@ -48,11 +49,13 @@ singleSpace spc lnCmnt blkCmnt = () <$ choice
 
 betweens p = between p p
 
-lexeme, isolated, lexemeSep, isolatedSep, isolatedNewline :: Parser a -> Parser a
-lexeme      = betweens spaceConsumer
-isolated    = betweens spaceConsumer1
-lexemeSep   = betweens skipSep
-isolatedSep = betweens lineSep
+lexeme, isolated, lexemeSep, isolatedSep, lexemeNewline, isolatedNewline
+  :: Parser a -> Parser a
+lexeme          = betweens spaceConsumer
+isolated        = betweens spaceConsumer1
+lexemeSep       = betweens skipSep
+isolatedSep     = betweens lineSep
+lexemeNewline   = betweens C.space
 isolatedNewline = betweens C.space1
 
 
@@ -217,7 +220,6 @@ term = dbg "term" $
                 ]
               ]
 
-
 -- パターンマッチの左辺値になるもの
 ptn :: Parser ASTMeta
 ptn = dbg "ptn" $
@@ -230,83 +232,80 @@ ptn = dbg "ptn" $
          , try $ parens ptn
          ]
 
--- -- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
--- defOpMaps :: OpMaps
--- defOpMaps = Map.fromList <$>
---   [ [("-", Prefix)
---     -- ("°", Postfix)
---     ]
---   -- 関数適用はここ
---   -- "."演算子はここ
---   -- , flip (,) InfixL <$> ["*", "/"]
---   -- , flip (,) InfixL <$> ["+", "-"]
---   -- , flip (,) InfixL <$> [ "<=", ">=", "<", ">" ]
---   -- , flip (,) InfixR <$> ["=="]
---   -- , flip (,) InfixL <$> ["&&"]
---   -- , flip (,) InfixL <$> ["||"]
---   -- 型注釈はここ
---   -- "="演算子(変数定義)はここ
---   ]
-
 -- 式を読む
 exprAST :: Parser ASTMeta
 exprAST = dbg "exprAST" $
   -- Comb.makeExprParser term ops
-  assign arg
-  where
-    complexArg  = strongerThanApply term
-    -- nonApplyarg = weakerThanApply arg
-    arg         = apply $ weakerThanApply $ apply complexArg
+  weakerThanApply $ apply $ infixPostfix $ applyWithContactOp term
 
-
-strongerThanApply, weakerThanApply :: Parser ASTMeta -> Parser ASTMeta
-strongerThanApply term = Comb.makeExprParser term
-  [[ Comb.Prefix prefix , Comb.Postfix postfix ]]
-
-prefix, postfix :: Parser (ASTMeta -> ASTMeta)
-prefix = try $ do
-  -- spaceConsumer1 <|> () <$ C.newline
-  pos      <- getSourcePos
-  astUnary <- ASTPrefix . OpLit <$> dbg "pre opident" opIdent
-  pure $ \astMeta ->
-           ASTMeta { astSrcPos = pos
-                   , ast       = astUnary astMeta }
-
-postfix = try $ do
-  pos      <- getSourcePos
-  astUnary <- ASTPostfix . OpLit <$> dbg "post opident" opIdent
-  notFollowedBy exprAST
-  -- spaceConsumer1 <|> () <$ C.eol
-  pure $ \astMeta ->
-           ASTMeta { astSrcPos = pos
-                   , ast       = astUnary astMeta }
 
 -- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
-weakerThanApply term = astWithTypeSig $ anonFun $ isolatedPostfix term
-  -- Comb.makeExprParser term
-  -- [ [Comb.Postfix isolatedPostfix]
-  -- , [Comb.Postfix astWithTypeSig]
-  -- ]
-
-
--- dot = try $ do
---   pos     <- getSourcePos
---   astBinOp <- ASTPostfix Dot <$ chunk "."
---               <* notFollowedBy (() <$ opIdent <|> () <$ integer)
---   pure $ \arg ->
---            ASTMeta { astSrcPos = pos
---                    , ast       = astBinOp arg }
-
-isolatedPostfix :: Parser ASTMeta -> Parser ASTMeta
-isolatedPostfix pArg =
-  pArg >>= isolatedPostfix'
+weakerThanApply term =
+  assign $ astWithTypeSig $ anonFun term
   where
-    isolatedPostfix' arg = option arg $ isolatedPostfix'' arg
-    isolatedPostfix'' arg = try $ do
+    assign :: Parser ASTMeta -> Parser ASTMeta
+    assign p = dbg "assign" $
+      assign' <|> p
+      where
+        assign' = try $ do
+          pos  <- getSourcePos
+          name <- ptn <* symbol "="
+          var  <- assign p <|> p
+          pure ASTMeta { astSrcPos = pos
+                     , ast       =  ASTAssign
+                                    { astAssignName = name
+                                    , astAssignVar  = var } }
+    -- 匿名関数を読む
+    anonFun :: Parser ASTMeta -> Parser ASTMeta
+    anonFun pBody =
+      anonFun' <|> pBody
+      where
+        anonFun' = try $ do
+          srcPos <- getSourcePos
+          -- パターンマッチ式を読む
+          conds <- lexeme $ ptn `sepEndBy1` spaceConsumer1
+          guard <- optional (guards exprAST)
+          _     <- symbol "->"
+          body  <- anonFun pBody <|> pBody
+          pure ASTMeta { astSrcPos = srcPos
+                       , ast       =  ASTAnonFun
+                                      { astPattern = conds
+                                      , astBody    = body
+                                      , astGuard   = guard } }
+
+
+infixPostfix :: Parser ASTMeta -> Parser ASTMeta
+infixPostfix pArg = dbg "infixPostfix" $
+  pArg >>= postfix'
+  where
+    postfix' arg =
+      option arg $ try $ do
       pos <- getSourcePos
-      op  <- ASTPostfix . OpLit <$> isolated opIdent
-      pure ASTMeta { astSrcPos = pos
-                   , ast       = op arg }
+      op  <- OpLit <$> (opIdent
+                        <|> lexemeNewline (opIdent <* notFollowedBy pArg))
+      postfix' ASTMeta
+        { astSrcPos = pos
+        , ast       = ASTPostfix
+                      { astArg = arg
+                      , astOp  = op } }
+
+
+-- 関数適用を読む
+apply :: Parser ASTMeta -> Parser ASTMeta
+apply pArg = dbg "apply" $
+  pArg >>= apply'
+  where
+    apply' :: ASTMeta -> Parser ASTMeta
+    apply' caller = dbg "apply'" $
+      option caller $ try $ do
+      _   <- spaceConsumer
+      pos <- getSourcePos
+      arg <- pArg
+      apply' ASTMeta
+        { astSrcPos = pos
+        , ast       = ASTApply
+                      { astApplyFun = caller
+                      , astApplyArg = arg } }
 
 
 -- 型注釈つきの式を読む
@@ -324,70 +323,42 @@ astWithTypeSig pArg =
 
 
 -- 関数適用を読む
-apply :: Parser ASTMeta -> Parser ASTMeta
-apply arg = dbg "apply" $
-  arg >>= apply'
+applyWithContactOp :: Parser ASTMeta -> Parser ASTMeta
+applyWithContactOp pArg = dbg "apply contact" $
+  postfix (prefix pArg) >>= apply'
+
   where
     apply' :: ASTMeta -> Parser ASTMeta
-    apply' caller = dbg "apply'" $
-      option caller
-      (try $ do
-          _   <- spaceConsumer
-          pos <- getSourcePos
-          arg <- arg
-          apply' ASTMeta
-            { astSrcPos = pos
-            , ast       = ASTApply
-                          { astApplyFun = caller
-                          , astApplyArg = arg } })
+    apply' caller = dbg "apply contact'" $
+      option caller $ try $ do
+      pos <- getSourcePos
+      arg <- try (postfix pArg) <|> (spaceConsumer1 *> postfix (prefix pArg))
+      apply' ASTMeta { astSrcPos = pos
+                     , ast       = ASTApply
+                                   { astApplyFun = caller
+                                   , astApplyArg = arg} }
 
--- 匿名関数を読む
-anonFun :: Parser ASTMeta -> Parser ASTMeta
-anonFun pBody =
-  try anonFun' <|> pBody
-  where
-    anonFun' = try $ do
-      srcPos <- getSourcePos
-      -- パターンマッチ式を読む
-      conds <- lexeme $ ptn `sepEndBy1` spaceConsumer1
-      guard <- optional (guards exprAST)
-      _     <- symbol "->"
-      body  <- try (anonFun pBody) <|> pBody
-      pure ASTMeta { astSrcPos = srcPos
-                   , ast       =  ASTAnonFun
-                                  { astPattern = conds
-                                  , astBody    = body
-                                  , astGuard   = guard } }
+    prefix, postfix :: Parser ASTMeta -> Parser ASTMeta
+    prefix pArg = dbg "prefix" $
+      try $ do
+      pos   <- getSourcePos
+      mayOp <- optional $ OpLit <$> opIdent
+      arg   <- pArg
+      pure $ maybe arg
+        (\op -> ASTMeta { astSrcPos = pos
+                      , ast       = ASTPrefix
+                                    { astOp  = op
+                                    , astArg = arg } })
+        mayOp
 
--- anonFuns :: Parser ASTMeta
--- anonFuns = -- -- dbg "anonFuns" $
---   do
---   srcPos <- getSourcePos
---   anons  <- anonFuns'
---   maybe anons
---     (\sig ->
---        ASTMeta { astSrcPos = srcPos
---                , ast = ASTTypeSig { astType       = sig
---                                   , astTypeSigVar = anons }})
---     <$> optional typeSig
---   where
---     anonFuns' = meta $ do
---       anons <- anonFun `sepEndBy` lineSep
---       pure ASTSeq { astSeq = anons }
-
-assign :: Parser ASTMeta -> Parser ASTMeta
-assign p = dbg "assign" $
-  try assign' <|> p
-  where
-    assign' = do
-      pos  <- getSourcePos
-      name <- var identifier <* symbol "="
-      var  <- assign p <|> p
-      pure ASTMeta { astSrcPos = pos
-                   , ast       =  ASTAssign
-                                  { astAssignName = name
-                                  , astAssignVar  = var } }
-
+    postfix pArg = dbg "postfix" $
+      try $ do
+      arg <- pArg
+      option arg $ meta $ do
+        op <- OpLit <$> opIdent <* notFollowedBy pArg
+        -- spaceConsumer1 <|> () <$ C.eol
+        pure ASTPostfix { astOp  = op
+                        , astArg = arg }
 
 
 -- 型定義を読む
