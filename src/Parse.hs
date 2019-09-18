@@ -349,7 +349,7 @@ applyWithContactOp pArg = dbg "apply contact" $
     postfix pArg = dbg "postfix" $
       try $ do
       arg <- pArg
-      option arg $ meta $ do
+      option arg $ meta $ try $ do
         op <- OpLit <$> dbg "postfix op" opIdent <* spaceConsumer1
         -- notFollowedBy $ satisfy (not . isSpace)
         -- spaceConsumer1 <|> () <$ C.eol
