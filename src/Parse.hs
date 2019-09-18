@@ -190,11 +190,6 @@ seqAST =  dbg "seqAST" $
   asts  <- lexemeSep $ toplevel `sepEndBy` lineSep
   pure ASTSeq { astSeq = asts }
 
--- sepEndBy p sep = do
---   init  <- many $ try $ p <* sep
---   whole <- option init $ do{ last <- toplevel; pure $ init ++ [last]}
---   pure whole
-
 
 toplevel :: Parser ASTMeta
 toplevel = dbg "toplevel" $
@@ -281,8 +276,8 @@ infixPostfix pArg = dbg "infixPostfix" $
     postfix' arg =
       option arg $ try $ do
       pos <- getSourcePos
-      op  <- OpLit <$> (opIdent
-                        <|> lexemeNewline (opIdent <* notFollowedBy pArg))
+      op  <- OpLit <$> (dbg "contact infix" opIdent
+                        <|> (C.space1 *> dbg "isolated infix" opIdent <* notFollowedBy pArg))
       postfix' ASTMeta
         { astSrcPos = pos
         , ast       = ASTPostfix
@@ -342,7 +337,7 @@ applyWithContactOp pArg = dbg "apply contact" $
     prefix pArg = dbg "prefix" $
       try $ do
       pos   <- getSourcePos
-      mayOp <- optional $ OpLit <$> opIdent
+      mayOp <- optional $ OpLit <$> dbg "prefix op" opIdent
       arg   <- pArg
       pure $ maybe arg
         (\op -> ASTMeta { astSrcPos = pos
@@ -355,7 +350,8 @@ applyWithContactOp pArg = dbg "apply contact" $
       try $ do
       arg <- pArg
       option arg $ meta $ do
-        op <- OpLit <$> opIdent <* notFollowedBy pArg
+        op <- OpLit <$> dbg "postfix op" opIdent <* spaceConsumer1
+        -- notFollowedBy $ satisfy (not . isSpace)
         -- spaceConsumer1 <|> () <$ C.eol
         pure ASTPostfix { astOp  = op
                         , astArg = arg }
@@ -445,7 +441,7 @@ str = dbg "str" $
 -- 型注釈を読む
 typeSig :: Parser Types
 typeSig =  dbg "typeList" $
-  symbol ":" *> types
+  try $ symbol ":" *> types
   where
     types = Elems <$> (typeTerm `sepBy` symbol "->")
     -- 型を表す項を読む。Int, a, [Double], (Int->String) など。
