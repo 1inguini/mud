@@ -1,27 +1,28 @@
 -- 環境
 module Env where
 
+import           Control.Monad.State
 import           Data.IORef
-import           Data.Map    as Map
+import           Data.Map            as Map
 import           Debug.Trace
 import           RecList
 import           TypeUtil
 
-
-type GeneralEnv a = IORef (Map String [(RecList String, a)])
+type GeneralEnv a = -- IORef
+  (Map String [(RecList String, a)])
 
 -- 与えられた名前の変数を探す
-lookupVar :: (Show a) => String -> GeneralEnv a -> IO (Maybe a)
-lookupVar name env = lookupVar' name env False
+lookupVar :: (Show a) => String -> State (GeneralEnv a) (Maybe a)
+lookupVar name = lookupVar' name False
 
 -- 与えられた名前の変数を探す。ただし変数として名前がなくても関数として一つだけあるならそれを返す
-lookupVarLoose :: (Show a) => String -> GeneralEnv a -> IO (Maybe a)
-lookupVarLoose name env = lookupVar' name env True
+lookupVarLoose :: (Show a) => String -> State (GeneralEnv a) (Maybe a)
+lookupVarLoose name = lookupVar' name True
 
 -- 与えられた名前の変数を探す。上2つを統合した関数。
-lookupVar' :: (Show a) => String -> GeneralEnv a -> Bool -> IO (Maybe a)
-lookupVar' name env loose = do
-  env' <- readIORef env
+lookupVar' :: (Show a) => String -> Bool -> State (GeneralEnv a) (Maybe a)
+lookupVar' name loose = do
+  env' <- get
   pure $ do
     vars <- env' !? name
     case vars of
@@ -30,47 +31,51 @@ lookupVar' name env loose = do
       -- 変数として名前がなくても関数として1つだけ名前があるならそれを参照する
       [(Elems _, expr)]   -> if loose then Just expr else Nothing
       -- そうでなければなし
-      otherwise           -> Nothing
+      _                   -> Nothing
 
 -- 関数を環境に登録する
 -- 同名かつ同型の関数がない場合のみ登録できる
-insertFun :: (Show a) => String -> RecList String -> a -> GeneralEnv a -> IO (Either String (GeneralEnv a))
-insertFun name types expr env = do
-  fe <- funExists name types env
+insertFun :: (Show a) => String -> RecList String -> a
+          -> State (GeneralEnv a) (Either String ())
+insertFun name types expr = do
+  fe <- funExists name types
   if not fe
   then do
-    insertFun' name types expr env
-    pure $ Right env
+    insertFun' name types expr
+    pure $ Right ()
   else
     pure $ Left ("function '" ++ name ++ " : " ++ argSig types ++ "' already exists")
 
 -- 同名の関数がある場合は、具体型の関数は先頭に、多相型の関数は末尾に追加する
-insertFun' :: String -> RecList String -> a -> GeneralEnv a -> IO (GeneralEnv a)
-insertFun' name types expr env = do
-  env' <- readIORef env
-  funs' <- case env' !? name of
+insertFun' :: String -> RecList String -> a -> State (GeneralEnv a) ()
+insertFun' name types expr = do
+  env <- get
+  funs' <- case env !? name of
     Nothing   -> pure []
     Just funs -> pure funs
   let generalizedTypes = generalizeTypes types
-  writeIORef env (Map.insert name (if types == generalizedTypes then(generalizedTypes, expr) : funs' else funs' ++ [(generalizedTypes, expr)]) env')
-  pure env
+  put (Map.insert name (if types == generalizedTypes
+                         then (generalizedTypes, expr):funs'
+                         else funs' ++ [(generalizedTypes, expr)])
+        env)
 
 -- 与えられた名前と引数の型を持つ関数が存在するか？
-funExists :: (Show a) => String -> RecList String -> GeneralEnv a -> IO Bool
-funExists name types env = do
-  fun <- lookupFun name types env True
+funExists :: (Show a) => String -> RecList String -> State (GeneralEnv a) Bool
+funExists name types = do
+  fun <- lookupFun name types True
   case fun of
-    Nothing   -> pure False
-    Just expr -> pure True
+    Nothing -> pure False
+    Just _  -> pure True
 
 
 -- 与えられた名前と引数の型を持つ関数を探す
-lookupFun :: (Show a) => String -> RecList String -> GeneralEnv a -> Bool -> IO (Maybe a)
-lookupFun name types env strict = do
+lookupFun :: (Show a) => String -> RecList String -> Bool
+          -> State (GeneralEnv a) (Maybe a)
+lookupFun name types strict = do
   --trace ("lookupFun: name=" ++ name) $ pure True
-  env' <- readIORef env
+  env <- get
   pure $ do
-    funs <- env' !? name
+    funs <- env !? name
     if hasVariable types
       then lastMatch (generalizeTypesWith "x" types) funs strict
       else firstMatch (generalizeTypesWith "x" types) funs strict
@@ -89,44 +94,44 @@ firstMatch types ((types', expr):es) strict =
 lastMatch :: (Show a) => RecList String -> [(RecList String, a)] -> Bool -> Maybe a
 lastMatch types funs strict = firstMatch types (reverse funs) strict
 
--- 変数を環境に登録する
--- 同名の変数がない場合のみ登録できる
--- 同名の関数はあってもいい
-insertVar :: (Show a) => String -> a -> GeneralEnv a -> IO (Either String (GeneralEnv a))
-insertVar name expr env = do
-  e <- varExists name env
-  if not e
-    then insertVarForce name expr env
-    else pure $ Left ("variable '" ++ name ++ "' already exists")
+-- -- 変数を環境に登録する
+-- -- 同名の変数がない場合のみ登録できる
+-- -- 同名の関数はあってもいい
+-- insertVar :: (Show a) => String -> a -> GeneralEnv a -> IO (Either String (GeneralEnv a))
+-- insertVar name expr env = do
+--   e <- varExists name env
+--   if not e
+--     then insertVarForce name expr env
+--     else pure $ Left ("variable '" ++ name ++ "' already exists")
 
--- 変数を環境に強制的に登録する
-insertVarForce :: String -> a -> GeneralEnv a -> IO (Either String (GeneralEnv a))
-insertVarForce name expr env = do
-  env' <- readIORef env
-  funs' <- case env' !? name of
-    Nothing   -> pure []
-    Just funs -> pure funs
-  writeIORef env (Map.insert name ((Elem "_", expr) : funs') env')
-  pure $ Right env
+-- -- 変数を環境に強制的に登録する
+-- insertVarForce :: String -> a -> GeneralEnv a -> IO (Either String (GeneralEnv a))
+-- insertVarForce name expr env = do
+--   env' <- readIORef env
+--   funs' <- case env' !? name of
+--     Nothing   -> pure []
+--     Just funs -> pure funs
+--   writeIORef env (Map.insert name ((Elem "_", expr) : funs') env')
+--   pure $ Right env
 
--- 与えられた名前を持つ変数が存在するか？
-varExists :: (Show a) => String -> GeneralEnv a -> IO Bool
-varExists name env = do
-  exists <- lookupVar name env
-  case exists of
-    Nothing   -> pure False
-    otherwise -> pure True
+-- -- 与えられた名前を持つ変数が存在するか？
+-- varExists :: (Show a) => String -> GeneralEnv a -> IO Bool
+-- varExists name env = do
+--   exists <- lookupVar name env
+--   case exists of
+--     Nothing   -> pure False
+--     otherwise -> pure True
 
--- 与えられた名前の変数、または関数が存在するか？
-anyExists :: String -> GeneralEnv a -> IO Bool
-anyExists name env = do
-  env' <- readIORef env
-  case env' !? name of
-    Nothing   -> pure False
-    Just vars -> pure True
+-- -- 与えられた名前の変数、または関数が存在するか？
+-- anyExists :: String -> GeneralEnv a -> IO Bool
+-- anyExists name env = do
+--   env' <- readIORef env
+--   case env' !? name of
+--     Nothing   -> pure False
+--     Just vars -> pure True
 
--- 環境の中身を表示する
-showEnv :: (Show a) => GeneralEnv a -> IO ()
-showEnv env = do
-  env' <- readIORef env
-  print env'
+-- -- 環境の中身を表示する
+-- showEnv :: (Show a) => GeneralEnv a -> IO ()
+-- showEnv env = do
+--   env' <- readIORef env
+--   print env'

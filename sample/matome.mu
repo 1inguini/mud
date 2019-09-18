@@ -2,9 +2,9 @@
 puts "hello, world!"
 
 # 算術
-1+2      #=> 3
-1+2*3    #=> 7
-(1+2)*3  #=> 9
+1 + 2      #=> 3
+1 + 2 * 3    #=> 7
+(1 + 2) * 3  #=> 9
   
 # 関数定義：1変数
 fun double : Int -> Int = x -> x * 2
@@ -26,7 +26,7 @@ add 10 20  #=> 30
 # 変数
 a=10
 b=20
-a+b  #=> 30
+a + b  #=> 30
 
 # パターンマッチ、再帰的定義
 # 1 + 2 + .. + n を計算する関数
@@ -107,7 +107,7 @@ fun select : [a] -> (a -> Bool) -> [a] = {
 fun qsort : [a] -> [a] = {
     []    -> []
     [e;es] -> es.select (x -> x < e).qsort +
-      ([e]+es).select (x -> x == e) + 
+      ([e] + es).select (x -> x == e) + 
       es.select (x -> x > e).qsort
 }
 
@@ -123,9 +123,9 @@ fun ** : Int -> Int -> Int = {
 # 新しい型を定義
 type Complex = { r:Int, i:Int }
 
-fun + : Complex -> Complex -> Complex = a b -> Complex (a.r+b.r) (a.i+b.i)
-fun - : Complex -> Complex -> Complex = a b -> Complex (a.r-b.r) (a.i-b.i)
-fun * : Complex -> Complex -> Complex = a b -> Complex (a.r*b.r-a.i*b.i) (a.r*b.i+a.i*b.r)
+fun + : Complex -> Complex -> Complex = a b -> Complex (a.r + b.r) (a.i + b.i)
+fun - : Complex -> Complex -> Complex = a b -> Complex (a.r - b.r) (a.i - b.i)
+fun * : Complex -> Complex -> Complex = a b -> Complex (a.r * b.r - a.i * b.i) (a.r * b.i + a.i * b.r)
 Complex 1 2 + Complex 3 4  #=> Complex 4 6
 
 # if文
@@ -155,7 +155,7 @@ fun apply : (a->a) -> a -> a = f x -> f x
 apply inc 0 #=> 1
 
 # 関数名の末尾に ? を使う
-fun even? : Int -> Bool = x -> x/2*2 == x
+fun even? : Int -> Bool = x -> x / 2 * 2 == x
 even? 8 #=> True
 even? 9 #=> False
 
@@ -177,7 +177,7 @@ add' 1 2 #=> 3
 
 # パターンマッチに条件をつける
 fun abs : Int -> Int = {
-  a |a<0| -> -a
+  a |a < 0| -> -a
   a       -> a
 }
 abs (-3)  #=> 3
@@ -185,7 +185,7 @@ abs 3     #=> 3
 
 # 条件つきパターンマッチを使った fizzbuzz の例
 fun divide? : Int -> Int -> Bool = {
-  a b -> (b/a)*a == b
+  a b -> (b / a) * a == b
 }
 fun fizzbuzz : Int -> String = {
   a |15.divide? a| -> "fizzbuzz"

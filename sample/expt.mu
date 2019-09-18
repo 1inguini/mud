@@ -4,7 +4,7 @@ dc = 0
 
 fun ** : Int -> Int -> Int = {
   b 0 -> 1
-  b n -> b * ( b ** (n-1) )
+  b n -> b * ( b ** (n - 1) )
 }
 
 puts (2**n)
@@ -26,8 +26,8 @@ fun even : Int -> Bool = n -> 2*(n/2) == n
 fun fast_expt : Int -> Int -> Int = {
   b 0 -> 1
   b n -> if even n
-    then square (fast_expt b (n/2))
-    else b * fast_expt b (n-1)
+    then square (fast_expt b (n / 2))
+    else b * fast_expt b (n - 1)
 }
 
 puts (fast_expt 2 n)

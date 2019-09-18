@@ -8,27 +8,27 @@ import           Env
 import           Expr
 import           RecList
 
- -- 与えられた環境をベースに、関数の仮引数に対して実引数を登録した環境を作る
-newEnv :: [String] -> [Expr] -> Map String [(RecList String, Expr)] -> IO Env
-newEnv params args outerEnv = do
-    env <- newIORef outerEnv
-    mapM_ (`insertAny` env) (zip params args)
-    pure env
+--  -- 与えられた環境をベースに、関数の仮引数に対して実引数を登録した環境を作る
+-- newEnv :: [String] -> [Expr] -> Map String [(RecList String, Expr)] -> IO Env
+-- newEnv params args outerEnv = do
+--     env <- newIORef outerEnv
+--     mapM_ (`insertAny` env) (zip params args)
+--     pure env
 
--- 環境に変数または関数を登録する
-insertAny :: (String, Expr) -> Env -> IO (Either String Env)
-insertAny (name, expr) env = case expr of
-    (Fun types _ _ _) -> insertFun name types expr env
-    (TypeLit types)   -> case types of
-        Elems types' -> insertFun name types expr env
-        Elem type'   -> insertVarForce name expr env
-    otherwise         -> insertVarForce name expr env
+-- -- 環境に変数または関数を登録する
+-- insertAny :: (String, Expr) -> Env -> IO (Either String Env)
+-- insertAny (name, expr) env = case expr of
+--     (Fun types _ _ _) -> insertFun name types expr env
+--     (TypeLit types)   -> case types of
+--         Elems types' -> insertFun name types expr env
+--         Elem type'   -> insertVarForce name expr env
+--     otherwise         -> insertVarForce name expr env
 
--- find のモナド版
-findM :: Monad m => (a -> m Bool) -> [a] -> m (Maybe a)
-findM p []     = pure Nothing
-findM p (x:xs) = ifM (p x) (pure $ Just x) (findM p xs)
+-- -- find のモナド版
+-- findM :: Monad m => (a -> m Bool) -> [a] -> m (Maybe a)
+-- findM p []     = pure Nothing
+-- findM p (x:xs) = ifM (p x) (pure $ Just x) (findM p xs)
 
--- if のモナド版
-ifM :: Monad m => m Bool -> m a -> m a -> m a
-ifM b t f = do b <- b; if b then t else f
+-- -- if のモナド版
+-- ifM :: Monad m => m Bool -> m a -> m a -> m a
+-- ifM b t f = do b <- b; if b then t else f

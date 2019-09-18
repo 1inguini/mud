@@ -1,121 +1,220 @@
+{-# LANGUAGE OverloadedStrings #-}
 -- 式
 module Expr where
 
-import           Data.Char
-import           Data.IORef
-import           Data.List   (intercalate)
-import           Data.Map    as Map hiding (foldr, map, take)
+-- import           Data.Char
+-- import           Data.IORef
+-- import           Data.List       (intercalate)
+import           Data.Map        as Map hiding (foldr, map, take)
 import           Data.Maybe
+import           Data.Text
 import           Debug.Trace
+import qualified Text.Megaparsec as MP
 
-import           Env
+-- import           Env
 import           RecList
 
-type Name = String
-type Param = String
-type Type = String
-type Env = GeneralEnv Expr
+type Name = Text
+type Param = Text
+type Type = Text
+type ASTEnv = GeneralEnv ASTMeta
+type Env = GeneralEnv ExprMeta
 
-data Code = Code { lineOfCode :: Int } deriving (Show)
-emptyCode = Code { lineOfCode = 0 }
+type GeneralEnv a = -- IORef
+  Map Text [(RecList Type, a)]
+
+type OpMaps = [Map Text OpAssociativity]
+
+-- data CodeMeta = CodeMeta { codeFileName :: FilePath
+--                          , codePos      :: (Int, Int) }
+--               deriving (Eq, Show)
+
+-- emptyCode :: CodeMeta
+-- emptyCode = CodeMeta { codeFileName = "interactive"
+--                      , codePos      = (0,0) }
+
+data ASTMeta = ASTMeta { astSrcPos :: MP.SourcePos
+                       , ast       :: AST}
+               deriving (Eq)
+
+instance Show ASTMeta where
+  show ASTMeta { ast = ast } = show ast
+
+data ExprMeta = ExprMeta { exprSrcPos :: MP.SourcePos
+                         , expr       :: Expr}
+               deriving (Eq)
+type NameAST = ASTMeta
+
+instance Show ExprMeta where
+  show ExprMeta { expr = expr } = show expr
+
+type Types = RecList Type
+
+data OpAssociativity = InfixR
+                     | Prefix
+                     | Postfix
+                     deriving (Eq, Show)
+
+data OpPrecedence = StrongerThan Op
+                  | EqualTo      Op
+                  | WeakerThan   Op
+                  deriving (Show, Eq)
+
+data Op = OpLit Text
+        | Dot deriving (Eq, Show)
+
+data OpLaw = OpLaw
+            { operator      :: Op
+            , associativity :: OpAssociativity
+            , precedence    :: OpPrecedence
+            } deriving (Show, Eq)
+
+data AST
+  = ASTComment Text
+  | ASTInt    { astInt  :: Integer }
+  | ASTDouble { astDub  :: Double }
+  | ASTStr    { astStr  :: Text}
+  | ASTList   { astList :: [ASTMeta] }
+  | ASTBool   { astBool :: Bool }
+
+  | ASTVar    { astVar  :: Name }
+  -- | ASTType   { astType :: Types }
+
+  -- | ASTBinOp       { astOp   :: Op
+  --                  , astArg0 :: ASTMeta
+  --                  , astArg1 :: ASTMeta }
+
+  | ASTPrefix      { astOp  :: Op
+                   , astArg :: ASTMeta }
+
+  | ASTPostfix     { astArg :: ASTMeta
+                   , astOp  :: Op }
+
+  | ASTSeq         { astSeq    :: [ASTMeta] }
+
+  | ASTAssign      { astAssignName :: NameAST
+                   , astAssignVar  :: ASTMeta }
+
+  | ASTFunDef      { astType       :: Types
+                   , astFunDefName :: NameAST
+                   , astFunParams  :: [Param]
+                   , astFunBody    :: ASTMeta }
+
+  | ASTOpDef       { astType      :: Types
+                   , astOpDefName :: NameAST
+                   , astOpAssoc   :: Maybe OpLaw
+                   , astOpParams  :: [Param]
+                   , astOpBody    :: ASTMeta }
+
+  | ASTApply       { astApplyFun :: ASTMeta
+                   , astApplyArg :: ASTMeta }
+
+  | ASTAnonFun     { astPattern :: [ASTMeta]
+                   , astGuard   :: Maybe ASTMeta
+                   , astBody    :: ASTMeta }
+
+  | ASTIf          { astIfCond :: ASTMeta
+                   , astIfThen :: ASTMeta
+                   , astIfElse :: ASTMeta }
+
+  | ASTTypeSig     { astType       :: Types
+                   , astTypeSigVar :: ASTMeta}
+
+  | ASTTypeDef     { astTypeDefName   :: NameAST
+                   , astTypeDefFields :: [(Text, Types)]}
+
+  | ASTStructType  { astFields :: [(Text, Types)] }
+
+  | ASTStructValue { astStructValue :: Map Name ASTMeta }
+
+  -- | ASTCall        { astType        :: Types
+  --                  , astCallFunName :: Name }
+  deriving (Eq, Show)
+
+type NameExpr = ExprMeta
 
 data Expr
-  = IntLit Integer
-  | StrLit String
-  | DoubleLit Double
-  | Var Name Code
-  | BinOp Op Code Expr Expr
-  | Seq [Expr]
-  | Assign NameExpr Expr
-  | FunDef NameExpr (RecList Type) [Param] Expr
-  | FunDefAnon (RecList Type) [Param] Expr Code
-  | Fun (RecList Type) [Param] Expr Env
-  | Apply Expr [Expr]
-  | Case [Expr] [([Expr],Expr,Maybe Expr,Code)] (RecList Type)
-  | TypeSig (RecList Type) Expr
-  | TypeLit (RecList Type)
-  | ListLit [Expr] Code
-  | BoolLit Bool
-  | If Expr Expr Expr Code -- If CondEx ThenEx ElseEx
-  | Neg Expr
-  | TypeDef NameExpr [(String, RecList Type)]
-  | StructType [(String, RecList Type)]
-  | StructValue (Map Name Expr)
-  | Call Name (RecList Type)
+  = ExprInt    { exprInt  :: Integer }
+  | ExprStr    { exprStr  :: Text}
+  | ExprDouble { exprDub  :: Double }
+  | ExprType   { exprType :: Types }
+  | ExprList   { exprList :: [ExprMeta] }
+  | ExprBool   { exprBool :: Bool }
+  | ExprVar    { exprType :: Types
+               , exprVar  :: Name }
 
-type NameExpr = Expr
+  | ExprSeq         { exprSeq :: [ExprMeta] }
 
-data Op
-  = Mul
-  | Div
-  | Add
-  | Sub
-  | Eq
-  | Dot
-  | RArrow
-  | Colon
-  | OpLit String
-  | Equal
-  | And
-  | Or
-  | Ltq
-  | Gtq
-  | Lt
-  | Gt
-  deriving (Show)
+  | ExprAssign      { exprAssignName :: NameExpr
+                    , exprAssignVar  :: ExprMeta }
 
-instance Show Expr where
-  show (IntLit i1) = show i1
-  show (StrLit str) = str
-  show (DoubleLit f) = show f
-  show (Neg e) = "-" ++ show e
-  show (Var name _) = name
-  show (BinOp op _ e1 e2) = "(" ++ show e1 ++ " " ++ show op ++ " " ++ show e2 ++ ")"
-  show (Seq exprs) = concatMap ((++ ";") . show) exprs
-  show (Fun types params body env) = "function : " ++ rArrow types
-  show (FunDef (Var name _) types params body) = "(Fun (" ++ name ++ ") " ++ show body ++ ")"
-  show (FunDefAnon types params body code) = "(anon fun : " ++ rArrow types ++ ", body: " ++ show body ++ ")"
-  show (Apply e1 e2) = "(" ++ show e1 ++ " " ++ show e2 ++ ")"
-  show (TypeSig sig expr) = show expr ++ " : " ++ show sig
-  show (ListLit exprs _) = "[" ++ intercalate "," (map show exprs) ++ "]"
-  show (BoolLit b) = show b
-  show (If condEx thenEx elseEx code) = "if " ++ show condEx ++ " then " ++ show thenEx ++ " else " ++ show elseEx
-  show (Case exprs matches types) = "(Case " ++ show matches ++ ")"
-  show (TypeDef (Var name _) types) = "(TypeDef " ++ name ++ " " ++ show types ++ ")"
-  show (StructType types) = "(StructType " ++ show types ++ ")"
-  show (StructValue sv) = Map.foldrWithKey f (show (fromJust $ sv !? "type")) sv
-    where f k a result = if k == "type" then result else result ++ " " ++ k ++ ":" ++ show a
-  show (Call name _) = "(Call " ++ name ++ ")"
-  show (TypeLit types) = "(TypeLit " ++ rArrow types ++ ")"
+  | ExprFun         { exprType      :: Types
+                    , exprFunParams :: [Param]
+                    , exprFunBody   :: ExprMeta
+                    -- , exprClosure   :: ExprEnv
+                    }
 
-instance Eq Expr where
-  (IntLit i1) == (IntLit i2) = i1 == i2
-  (StrLit s1) == (StrLit s2) = s1 == s2
-  (ListLit l1 c1) == (ListLit l2 c2) = l1 == l2
-  (BoolLit b1) == (BoolLit b2) = b1 == b2
-  e1 == e2 = trace (show (e1,e2)) False
+  | ExprApply       { exprApplyFun  :: ExprMeta
+                    , exprApplyArgs :: [ExprMeta] }
 
-typeOf' :: Expr -> RecList String
-typeOf' (IntLit i) = Elem "Int"
-typeOf' (StrLit s) = Elem "String"
-typeOf' (BoolLit b) = Elem "Bool"
-typeOf' (DoubleLit b) = Elem "Double"
-typeOf' (TypeSig sig _) = sig
-typeOf' (Fun sig _ _ _) = sig
-typeOf' (ListLit (e:es) _) = Elems [Elem "List", typeOf' e]
-typeOf' (ListLit [] _) = Elems [Elem "List", Elem "a"]
-typeOf' (StructValue s) = case s !? "type" of
-  Just (StrLit str) -> Elem str
-  Nothing           -> error "type not defined in struct value"
+  | ExprAnonFun     { exprCaseType    :: Types
+                    -- , exprCasePattern :: [ExprMeta]
+                    , exprCaseBranchs :: [([ExprMeta],ExprMeta,Maybe ExprMeta)] }
 
--- パターンマッチの元になる式と、マッチさせる対象のリストから、変数または関数とそれに対する式のリストの組を返す
--- 例: a 2 [e;es] に 10 2 [1,2,3] をマッチさせる場合、(["a", "e", "es"], [IntLit 10, IntLit 1, ListLit [2,3]]) を返す
-paramsAndArgs :: [Expr] -> [Expr] -> ([String], [Expr])
-paramsAndArgs [] [] = ([],[])
-paramsAndArgs (Var v _:e1s) (e:e2s) = let rests = paramsAndArgs e1s e2s
-                                  in (v : fst rests, e : snd rests)
-paramsAndArgs (ListLit [Var h _,Var t _] c1 : e1s) (ListLit (e2:e2') c2 : e2s) =
-  let rests = paramsAndArgs e1s e2s
-  in (h : t : fst rests, e2 : ListLit e2' c2 : snd rests)
-paramsAndArgs (e1:e1s) (e2:e2s) = paramsAndArgs e1s e2s
+  | ExprTypeSig     { exprType       :: Types
+                    , exprTypeSigVar :: ExprMeta}
 
+  | ExprTypeDef     { exprTypeDefName   :: NameExpr
+                    , exprTypeDefFields :: [(Text, Types)]}
+
+  | ExprStructType  { exprFields :: [(Text, Types)] }
+
+  | ExprStructValue { exprStructValue :: Map Name ExprMeta }
+
+  -- | ExprCall        { exprType        :: Types
+  --                   , exprCallFunName :: Name }
+  deriving (Eq, Show)
+
+-- instance Eq AST where
+--   (ASTIntLit i1) == (ASTIntLit i2) = i1 == i2
+--   (ASTStrLit s1) == (ASTStrLit s2) = s1 == s2
+--   (ASTListLit l1) == (ASTListLit l2) = l1 == l2
+--   (ASTBoolLit b1) == (ASTBoolLit b2) = b1 == b2
+--   e1 == e2 = trace (show (e1,e2)) False
+
+typeOf' :: Expr -> Maybe Types
+typeOf' ExprInt    {} = pure $ Elem "Int"
+typeOf' ExprStr    {} = pure $ Elem "Text"
+typeOf' ExprBool   {} = pure $ Elem "Bool"
+typeOf' ExprDouble {} = pure $ Elem "Double"
+-- typeOf' ExprTypeSig { exprType = t } = pure t
+-- typeOf' ExprFun { exprType = t } = pure t
+
+typeOf' ExprList { exprList = e:_ } = do
+  e' <- typeOf' $ expr e
+  pure $ Elems [Elem "List", e']
+
+typeOf' ExprList { exprList = [] }  =
+  pure $ Elems [Elem "List", Elem "a"]
+
+typeOf' ExprStructValue { exprStructValue = s } =
+  case s !? "type" of
+    Just ExprMeta { expr = ExprStr str } -> pure $ Elem str
+    _                                    -> Nothing
+
+typeOf' expr = pure $ exprType expr
+
+-- -- パターンマッチの元になる式と、マッチさせる対象のリストから、変数または関数とそれに対する式のリストの組を返す
+-- -- 例: a 2 [e;es] に 10 2 [1,2,3] をマッチさせる場合、(["a", "e", "es"], [IntLit 10, IntLit 1, ListLit [2,3]]) を返す
+-- paramsAndArgs :: [Expr] -> [Expr] -> Maybe ([Text], [Expr])
+-- paramsAndArgs [] [] = pure ([],[])
+-- paramsAndArgs (ExprVar { exprVar = v }:e1s) (e:e2s) = do
+--   rests <- paramsAndArgs e1s e2s
+--   pure (v : fst rests, e : snd rests)
+-- paramsAndArgs
+--   (ExprListLit { exprList = [ExprVar h, ExprVar t] } : e1s)
+--   (ExprListLit (e2:e2'): e2s) = do
+--   rests <- paramsAndArgs e1s e2s
+--   pure (h:t: fst rests, e2: ExprListLit e2' : snd rests)
+-- paramsAndArgs (_:e1s) (_:e2s) = paramsAndArgs e1s e2s
+-- paramsAndArgs _ _ = Nothing
