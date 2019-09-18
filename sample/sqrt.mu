@@ -1,13 +1,13 @@
-fun average : a -> a -> a = x y -> (x + y) / 2.0
+fun average : a -> a -> a = x y -> (x+y)/2.0
 
 fun abs : a -> a = x -> if x < 0 then -x else x
 
 fun improve : a -> a -> a = {
-  guess x -> average guess (x / guess)
+  guess x -> average guess (x/guess)
 }
 
 fun good_enough? : a -> a -> Bool = {
-  guess x -> abs (guess * guess - x) < 0.0001
+  guess x -> abs (guess*guess - x) < 0.0001
 }
 
 fun sqrt_iter : a -> a -> a = {

@@ -12,26 +12,26 @@ fun gcd : Int -> Int -> Int = {
     a' = abs(a)
     b' = abs(b)
     if a' < b'
-      then gcd a' (b' - a')
-      else gcd (a' - b') b'
+      then gcd a' (b'-a')
+      else gcd (a'-b') b'
   }
 }
 
 fun mkRat : Int-> Int -> Rat = x y -> {
   d = gcd x y 
-  Rat (x / d) (y / d)
+  Rat (x/d) (y/d)
 }
 
 fun + : Rat -> Rat -> Rat = {
-  x y -> mkRat (x.n * y.d + x.d * y.n) (x.d * y.d)
+  x y -> mkRat (x.n*y.d + x.d*y.n) (x.d * y.d)
 }
 
 fun - : Rat -> Rat -> Rat = x y -> {
-  mkRat (x.n * y.d - x.d * y.n) (x.d * y.d)
+  mkRat (x.n*y.d - x.d*y.n) (x.d * y.d)
 }
 
 fun * : Rat -> Rat -> Rat = x y -> {
-  mkRat (x.n * y.n) (x.d * y.d)
+  mkRat (x.n*y.n) (x.d*y.d)
 }
 
 fun to_s : Rat -> String = {
