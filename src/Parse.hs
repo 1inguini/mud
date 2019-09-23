@@ -15,7 +15,7 @@ import           Data.Text                      (Text, cons, pack)
 import           Data.Void
 import           Debug.Trace
 import           Safe
-import           Text.Megaparsec
+import           Text.Megaparsec                hiding (sepBy, sepBy1)
 import qualified Text.Megaparsec.Char           as C
 import qualified Text.Megaparsec.Char.Lexer     as L
 import           Text.Megaparsec.Debug
@@ -48,6 +48,15 @@ singleSpace spc lnCmnt blkCmnt = () <$ choice
   [hidden spc, hidden lnCmnt, hidden blkCmnt]
 
 betweens p = between p p
+
+sepBy p sep = option [] $ sepBy1 p sep
+
+sepBy1 p sep =
+  (:[]) <$> p >>= sepBy'
+  where
+    sepBy' accm = option accm $ try $ do
+      p' <- sep *> p
+      sepBy' $ accm <> [p']
 
 lexeme, isolated, lexemeSep, isolatedSep, lexemeNewline, isolatedNewline
   :: Parser a -> Parser a
@@ -231,7 +240,7 @@ ptn = --dbg "ptn" $
 exprAST :: Parser ASTMeta
 exprAST = --dbg "exprAST" $
   -- Comb.makeExprParser term ops
-  weakerThanApply $ apply $ infixPostfix $ applyWithContactOp term
+  weakerThanApply $ incomplete term
 
 
 -- 演算子とその結合規則。リストの先頭のほうが優先順位が高い。
@@ -269,20 +278,40 @@ weakerThanApply term =
                                       , astGuard   = guard } }
 
 
-infixPostfix :: Parser ASTMeta -> Parser ASTMeta
-infixPostfix pArg = --dbg "infixPostfix" $
-  pArg >>= postfix'
+incomplete :: Parser ASTMeta -> Parser ASTMeta
+incomplete pArg = --dbg "incomplete" $
+  meta $ try $ do
+  head <- Right <$> postfix (prefix pArg)
+  expr <- many $ try $ choice
+         [ Right <$> try (spaceConsumer1 *> postfix (prefix pArg))
+         , Right <$> try (spaceConsumer *> postfix pArg)
+         , Left . OpLit <$> (skipSep *> opIdent)
+         ]
+  pure ASTExpr { astExpr = head:expr }
   where
-    postfix' arg =
-      option arg $ try $ do
-      pos <- getSourcePos
-      op  <- OpLit <$> (opIdent
-                        <|> (C.space1 *> opIdent <* notFollowedBy pArg))
-      postfix' ASTMeta
-        { astSrcPos = pos
-        , ast       = ASTPostfix
-                      { astArg = arg
-                      , astOp  = op } }
+
+    prefix, postfix :: Parser ASTMeta -> Parser ASTMeta
+    prefix pArg = --dbg "prefix" $
+      try $ do
+      pos   <- getSourcePos
+      mayOp <- optional $ OpLit <$> try opIdent
+      arg   <- pArg
+      pure $ maybe arg
+        (\op -> ASTMeta { astSrcPos = pos
+                        , ast       = ASTPrefix
+                                      { astOp  = op
+                                      , astArg = arg } })
+        mayOp
+
+    postfix pArg = --dbg "postfix" $
+      try $ do
+      arg <- pArg
+      option arg $ meta $ try $ do
+        op <- OpLit <$> opIdent <* notFollowedBy pArg
+        -- notFollowedBy $ satisfy (not . isSpace)
+        -- spaceConsumer1 <|> () <$ C.eol
+        pure ASTPostfix { astOp  = op
+                        , astArg = arg }
 
 
 -- 関数適用を読む
@@ -315,46 +344,6 @@ astWithTypeSig pArg =
       pure ASTMeta { astSrcPos = pos
                    , ast = ASTTypeSig { astType       = sig
                                       , astTypeSigVar = arg } }
-
-
--- 関数適用を読む
-applyWithContactOp :: Parser ASTMeta -> Parser ASTMeta
-applyWithContactOp pArg = --dbg "apply contact" $
-  postfix (prefix pArg) >>= apply'
-
-  where
-    apply' :: ASTMeta -> Parser ASTMeta
-    apply' caller = --dbg "apply contact'" $
-      option caller $ try $ do
-      pos <- getSourcePos
-      arg <- try (postfix pArg) <|> (spaceConsumer1 *> postfix (prefix pArg))
-      apply' ASTMeta { astSrcPos = pos
-                     , ast       = ASTApply
-                                   { astApplyFun = caller
-                                   , astApplyArg = arg} }
-
-    prefix, postfix :: Parser ASTMeta -> Parser ASTMeta
-    prefix pArg = --dbg "prefix" $
-      try $ do
-      pos   <- getSourcePos
-      mayOp <- optional $ OpLit <$> opIdent
-      arg   <- pArg
-      pure $ maybe arg
-        (\op -> ASTMeta { astSrcPos = pos
-                      , ast       = ASTPrefix
-                                    { astOp  = op
-                                    , astArg = arg } })
-        mayOp
-
-    postfix pArg = --dbg "postfix" $
-      try $ do
-      arg <- pArg
-      option arg $ meta $ try $ do
-        op <- OpLit <$> opIdent <* spaceConsumer1
-        -- notFollowedBy $ satisfy (not . isSpace)
-        -- spaceConsumer1 <|> () <$ C.eol
-        pure ASTPostfix { astOp  = op
-                        , astArg = arg }
 
 
 -- 型定義を読む

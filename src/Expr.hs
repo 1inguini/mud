@@ -92,6 +92,8 @@ data AST
 
   | ASTSeq         { astSeq    :: [ASTMeta] }
 
+  | ASTExpr        { astExpr :: [Either Op ASTMeta] }
+
   | ASTAssign      { astAssignName :: NameAST
                    , astAssignVar  :: ASTMeta }
 
