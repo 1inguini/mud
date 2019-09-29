@@ -79,7 +79,7 @@ desugar' ASTSeq { astSeq = asts } =
   undefined
   where
     funDefs = filter isOpDef asts
-    isOpDef ASTMeta { ast = ASTOpDef {} } = True
+    isOpDef ASTMeta { ast = ASTOpDef {  } } = True
     isOpDef _                             = False
 
 

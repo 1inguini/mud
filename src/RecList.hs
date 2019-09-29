@@ -3,7 +3,7 @@
 module RecList where
 import           Data.List
 
-data RecList a = Elem a | Elems [RecList a] deriving Show
+data RecList a = Elem a | Elems [RecList a] deriving (Show)
 
 -- 再帰的なリストの末尾をのぞいたものをリストとして返す
 rArgs :: RecList a -> [RecList a]

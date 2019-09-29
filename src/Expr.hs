@@ -1,18 +1,34 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies      #-}
 -- 式
 module Expr where
+
+import           Prelude            as P
 
 -- import           Data.Char
 -- import           Data.IORef
 -- import           Data.List       (intercalate)
-import           Data.Map        as Map hiding (foldr, map, take)
+import qualified Data.List.NonEmpty as NE
+import           Data.Map           as Map (Map, (!?))
 import           Data.Maybe
-import           Data.Text
+import           Data.Proxy
+import           Data.Text          (Text)
 import           Debug.Trace
-import qualified Text.Megaparsec as MP
+import           Text.Megaparsec    (PosState (..), SourcePos, Stream (..),
+                                     Token, Tokens, option, try)
 
 -- import           Env
 import           RecList
+
+
+sepBy p sep = option [] $ sepBy1 p sep
+
+sepBy1 p sep =
+  (:[]) <$> p >>= sepBy'
+  where
+    sepBy' accm = option accm $ try $ do
+      p' <- sep *> p
+      sepBy' $ accm <> [p']
 
 type Name = Text
 type Param = Text
@@ -23,7 +39,7 @@ type Env = GeneralEnv ExprMeta
 type GeneralEnv a = -- IORef
   Map Text [(RecList Type, a)]
 
-type OpMaps = [Map Text OpAssociativity]
+type OpMaps = [Map Text Bool]
 
 -- data CodeMeta = CodeMeta { codeFileName :: FilePath
 --                          , codePos      :: (Int, Int) }
@@ -33,14 +49,17 @@ type OpMaps = [Map Text OpAssociativity]
 -- emptyCode = CodeMeta { codeFileName = "interactive"
 --                      , codePos      = (0,0) }
 
-data ASTMeta = ASTMeta { astSrcPos :: MP.SourcePos
+data ASTMeta = ASTMeta { astSrcPos :: SourcePos
                        , ast       :: AST}
-               deriving (Eq)
+             deriving (Eq)
+
+instance Ord ASTMeta where
+  compare _ _ = EQ
 
 instance Show ASTMeta where
   show ASTMeta { ast = ast } = show ast
 
-data ExprMeta = ExprMeta { exprSrcPos :: MP.SourcePos
+data ExprMeta = ExprMeta { exprSrcPos :: SourcePos
                          , expr       :: Expr}
                deriving (Eq)
 type NameAST = ASTMeta
@@ -50,24 +69,22 @@ instance Show ExprMeta where
 
 type Types = RecList Type
 
-data OpAssociativity = InfixR
-                     | Prefix
-                     | Postfix
-                     deriving (Eq, Show)
 
 data OpPrecedence = StrongerThan Op
                   | EqualTo      Op
                   | WeakerThan   Op
-                  deriving (Show, Eq)
+                  deriving (Show, Ord, Eq)
 
-data Op = OpLit Text
-        | Dot deriving (Eq, Show)
+newtype Op = OpLit Text deriving (Eq, Ord, Show)
 
-data OpLaw = OpLaw
-            { operator      :: Op
-            , associativity :: OpAssociativity
-            , precedence    :: OpPrecedence
-            } deriving (Show, Eq)
+newtype OpLaw = OpLaw (Maybe InfixOpLaw)
+              deriving (Eq, Ord, Show)
+
+data InfixOpLaw = InfixOpLaw
+                  { isRightAssoc :: Bool
+                  , precedence   :: OpPrecedence
+                  } deriving (Eq, Ord, Show)
+
 
 data AST
   = ASTComment Text
@@ -92,18 +109,18 @@ data AST
 
   | ASTSeq         { astSeq    :: [ASTMeta] }
 
-  | ASTExpr        { astExpr :: [Either Op ASTMeta] }
+  | ASTExpr        { astExpr :: [(SourcePos, Either Op AST)] }
 
   | ASTAssign      { astAssignName :: NameAST
                    , astAssignVar  :: ASTMeta }
 
   | ASTFunDef      { astType       :: Types
-                   , astFunDefName :: NameAST
+                   , astFunDefName :: Name
                    , astFunParams  :: [Param]
                    , astFunBody    :: ASTMeta }
 
   | ASTOpDef       { astType      :: Types
-                   , astOpDefName :: NameAST
+                   , astOpDefName :: Name
                    , astOpAssoc   :: Maybe OpLaw
                    , astOpParams  :: [Param]
                    , astOpBody    :: ASTMeta }
@@ -133,6 +150,46 @@ data AST
   --                  , astCallFunName :: Name }
   deriving (Eq, Show)
 
+
+instance Ord AST where
+  compare _ _ = EQ
+
+newtype OpASTList = OpASTList { unOpASTList :: [(SourcePos, Either Op AST)] }
+                  deriving (Show, Eq)
+
+instance Stream OpASTList where
+  type Token  OpASTList = (Either Op AST)
+  type Tokens OpASTList = [Either Op AST]
+  tokensToChunk Proxy xs = xs
+  chunkToTokens Proxy = id
+  chunkLength Proxy = length
+  take1_ (OpASTList [])         = Nothing
+  take1_ (OpASTList ((_,t):ts)) = Just (t, OpASTList ts)
+  takeN_ n (OpASTList s)
+    | n <= 0    = Just ([], OpASTList s)
+    | null s    = Nothing
+    | otherwise =
+        let (x, s') = splitAt n s
+        in Just (snd <$> x, OpASTList s')
+  takeWhile_ f (OpASTList s) =
+    let (x, s') = span (\(_,a) -> f a) s
+    in (snd <$> x, OpASTList s')
+  showTokens Proxy = show
+  reachOffset offset pst@PosState { pstateOffset    = defOffset
+                                  , pstateSourcePos = defSrcPos
+                                  , pstateInput     = inputs } =
+    case drop (offset - defOffset) (unOpASTList inputs) of
+      [] ->
+        ( defSrcPos
+        , "<missing input>"
+        , pst { pstateInput = OpASTList [] }
+        )
+      (x@(pos, _):xs) ->
+        ( pos
+        , "<missing input>"
+        , pst { pstateInput = OpASTList (x:xs) }
+        )
+
 type NameExpr = ExprMeta
 
 data Expr
@@ -142,10 +199,12 @@ data Expr
   | ExprType   { exprType :: Types }
   | ExprList   { exprList :: [ExprMeta] }
   | ExprBool   { exprBool :: Bool }
-  | ExprVar    { exprType :: Types
-               , exprVar  :: Name }
+  | ExprVar    { exprVar  :: Name }
 
-  | ExprSeq         { exprSeq :: [ExprMeta] }
+  | ExprSeq         { exprSeqFunDefs  :: [ExprMeta]
+                    , exprSeqTypeDefs :: [ExprMeta]
+                    , exprSeqAnonFuns :: [ExprMeta]
+                    , exprSeqExprs    :: [ExprMeta] }
 
   | ExprAssign      { exprAssignName :: NameExpr
                     , exprAssignVar  :: ExprMeta }
@@ -156,8 +215,8 @@ data Expr
                     -- , exprClosure   :: ExprEnv
                     }
 
-  | ExprApply       { exprApplyFun  :: ExprMeta
-                    , exprApplyArgs :: [ExprMeta] }
+  | ExprApply       { exprApplyFun :: ExprMeta
+                    , exprApplyArg :: ExprMeta }
 
   | ExprAnonFun     { exprCaseType    :: Types
                     -- , exprCasePattern :: [ExprMeta]
